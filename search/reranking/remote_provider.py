@@ -45,10 +45,6 @@ class RemoteRerankerProvider(BaseRerankerProvider):
     def model_name(self) -> Optional[str]:
         return self._model_name
 
-    @property
-    def is_mock(self) -> bool:
-        return False
-
     def _get_api_key(self) -> Optional[str]:
         """Read API token from configured environment variable."""
         return os.environ.get(self._api_key_env_var)

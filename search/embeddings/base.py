@@ -26,12 +26,6 @@ class BaseEmbeddingProvider(ABC):
         """Embedding vector dimensions."""
         ...
 
-    @property
-    @abstractmethod
-    def is_mock(self) -> bool:
-        """Whether this provider produces mock data."""
-        ...
-
     @abstractmethod
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for multiple texts."""
@@ -46,4 +40,3 @@ class BaseEmbeddingProvider(ABC):
     async def check_readiness(self) -> bool:
         """Verify provider availability."""
         ...
-

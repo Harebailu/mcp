@@ -55,7 +55,7 @@ class DotNetApiClient:
                 max_redirects=self._max_redirects,
                 headers={
                     "Accept": "application/json",
-                    "User-Agent": "pm_mcp_server/0.1.0",
+                    "User-Agent": "mcp_server/0.1.0",
                 },
             )
 

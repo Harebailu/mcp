@@ -1,4 +1,4 @@
-# Catalog Maintenance Guide: `pm_mcp_server`
+# Catalog Maintenance Guide: `mcp_server`
 
 ## 1. Directory Structure
 

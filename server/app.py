@@ -1,4 +1,4 @@
-"""Main application entry point for pm_mcp_server.
+"""Main application entry point for mcp_server.
 
 Starts the MCP server with the configured transport and handles
 the full application lifecycle.
@@ -6,7 +6,8 @@ the full application lifecycle.
 Usage:
     python -m server.app
     python server/app.py
-    pm-mcp-server (via pyproject.toml entry point)
+    mcp-server (via pyproject.toml entry point)
+    pm-mcp-server (production entry point)
 """
 
 from __future__ import annotations

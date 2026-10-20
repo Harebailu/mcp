@@ -51,10 +51,6 @@ class RemoteEmbeddingProvider(BaseEmbeddingProvider):
     def dimensions(self) -> int:
         return self._dimensions
 
-    @property
-    def is_mock(self) -> bool:
-        return False
-
     def _get_api_key(self) -> Optional[str]:
         """Read API token from configured environment variable."""
         return os.environ.get(self._api_key_env_var)

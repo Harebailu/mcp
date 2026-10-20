@@ -1,8 +1,8 @@
-# Security Architecture & Policies: `pm_mcp_server`
+# Security Architecture & Policies: `mcp_server`
 
 ## 1. Security Overview
 
-`pm_mcp_server` sits between an AI Agent and an existing ASP.NET Core/.NET backend. Its primary security responsibilities are:
+`mcp_server` (production service: `pm-mcp-server`) sits between an AI Agent and an existing ASP.NET Core/.NET backend. Its primary security responsibilities are:
 - Server-side read-only policy enforcement.
 - Inbound MCP JWT expiration-claim verification.
 - Sensitive credential isolation.

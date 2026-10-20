@@ -1,4 +1,4 @@
-"""Typed configuration management for pm_mcp_server.
+"""Typed configuration management for mcp_server.
 
 Loads settings from config/config.yaml with documented environment-variable overrides.
 Validates all settings at startup, enforcing semantic search readiness,
@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 class ApplicationConfig(BaseModel):
     """Top-level application identity."""
-    name: str = "pm_mcp_server"
+    name: str = "mcp_server"
     environment: str = "development"
 
 
@@ -68,21 +68,35 @@ class McpConfig(BaseModel):
         return v
 
 
+class OllamaConfig(BaseModel):
+    """Configuration for local Ollama service."""
+    base_url: str = "http://localhost:11434"
+    timeout_seconds: int = Field(default=60, ge=1, le=600)
+
+    @field_validator("base_url")
+    @classmethod
+    def _validate_url(cls, v: str) -> str:
+        v = v.strip().rstrip("/")
+        if not v.startswith(("http://", "https://")):
+            raise ValueError(f"Ollama base_url must start with http:// or https://, got: {v}")
+        return v
+
+
 class EmbeddingConfig(BaseModel):
     """Multilingual embedding service configuration."""
-    provider: str = "mock"  # "mock" or "remote"
+    provider: str = "ollama"  # "ollama" or "remote"
     base_url: Optional[str] = None
     endpoint_path: Optional[str] = None
-    model: str = "REPLACE_WITH_CONFIGURED_MULTILINGUAL_MODEL"
+    model: str = "bge-m3:latest"
     api_key_env_var: str = "EMBEDDING_API_KEY"
-    timeout_seconds: int = Field(default=20, ge=1, le=120)
+    timeout_seconds: int = Field(default=60, ge=1, le=300)
     batch_size: int = Field(default=32, ge=1, le=256)
-    dimensions: Optional[int] = Field(default=None, ge=1)
+    dimensions: Optional[int] = Field(default=1024, ge=1)
 
     @field_validator("provider")
     @classmethod
     def _validate_provider(cls, v: str) -> str:
-        allowed = {"mock", "remote"}
+        allowed = {"ollama", "remote"}
         if v not in allowed:
             raise ValueError(f"embedding provider must be one of {allowed}, got: '{v}'")
         return v
@@ -91,19 +105,19 @@ class EmbeddingConfig(BaseModel):
 class RerankingConfig(BaseModel):
     """Candidate reranking service configuration."""
     enabled: bool = True
-    provider: str = "mock"  # "mock" or "remote"
+    provider: str = "ollama"  # "ollama" or "remote"
     base_url: Optional[str] = None
     endpoint_path: Optional[str] = None
-    model: Optional[str] = None
+    model: str = "qwen:1.8b"
     api_key_env_var: str = "RERANKER_API_KEY"
-    timeout_seconds: int = Field(default=20, ge=1, le=120)
+    timeout_seconds: int = Field(default=60, ge=1, le=300)
     candidate_limit: int = Field(default=20, ge=1, le=100)
     required: bool = True
 
     @field_validator("provider")
     @classmethod
     def _validate_provider(cls, v: str) -> str:
-        allowed = {"mock", "remote"}
+        allowed = {"ollama", "remote"}
         if v not in allowed:
             raise ValueError(f"reranking provider must be one of {allowed}, got: '{v}'")
         return v
@@ -166,9 +180,9 @@ class CacheConfig(BaseModel):
 class StartupChecksConfig(BaseModel):
     """Startup readiness and validation controls."""
     validate_catalog: bool = True
-    check_embedding_service: bool = True
-    check_reranker_service: bool = True
-    check_llm_service_when_enabled: bool = True
+    check_ollama_service: bool = True
+    check_embedding_model: bool = True
+    check_reranking_model: bool = True
     fail_on_service_unavailable: bool = True
     allow_catalog_only_startup: bool = False
 
@@ -222,10 +236,11 @@ class AuthenticationConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 class AppConfig(BaseModel):
-    """Root configuration for pm_mcp_server."""
+    """Root configuration for mcp_server."""
     application: ApplicationConfig = Field(default_factory=ApplicationConfig)
     dotnet_api: DotNetApiConfig
     mcp: McpConfig = Field(default_factory=McpConfig)
+    ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     startup_checks: StartupChecksConfig = Field(default_factory=StartupChecksConfig)
@@ -276,6 +291,29 @@ def load_config(config_path: Optional[str | Path] = None) -> AppConfig:
 def _apply_env_overrides(raw: dict) -> None:
     """Apply documented environment-variable overrides to raw config dict."""
     env_map = [
+        # MCP_ prefixes (standard)
+        ("MCP_OLLAMA_BASE_URL", ["ollama", "base_url"]),
+        ("MCP_OLLAMA_TIMEOUT", ["ollama", "timeout_seconds"]),
+        ("MCP_DOTNET_BASE_URL", ["dotnet_api", "base_url"]),
+        ("MCP_DOTNET_SWAGGER_URL", ["dotnet_api", "swagger_ui_url"]),
+        ("MCP_DOTNET_OPENAPI_URL", ["dotnet_api", "openapi_spec_url"]),
+        ("MCP_DOTNET_TIMEOUT", ["dotnet_api", "timeout_seconds"]),
+        ("MCP_HOST", ["mcp", "host"]),
+        ("MCP_PORT", ["mcp", "port"]),
+        ("MCP_TRANSPORT", ["mcp", "transport"]),
+        ("MCP_SEARCH_BACKEND", ["search", "backend"]),
+        ("MCP_EMBEDDING_PROVIDER", ["search", "embedding", "provider"]),
+        ("MCP_EMBEDDING_BASE_URL", ["search", "embedding", "base_url"]),
+        ("MCP_EMBEDDING_MODEL", ["search", "embedding", "model"]),
+        ("MCP_RERANKER_PROVIDER", ["search", "reranking", "provider"]),
+        ("MCP_RERANKER_BASE_URL", ["search", "reranking", "base_url"]),
+        ("MCP_RERANKER_MODEL", ["search", "reranking", "model"]),
+        ("MCP_ALLOW_CATALOG_ONLY", ["startup_checks", "allow_catalog_only_startup"]),
+        ("MCP_FAIL_ON_UNAVAILABLE", ["startup_checks", "fail_on_service_unavailable"]),
+        ("MCP_LOG_LEVEL", ["logging", "level"]),
+        ("MCP_AUTH_ENABLED", ["authentication", "enabled"]),
+        ("MCP_CLOCK_SKEW", ["authentication", "clock_skew_seconds"]),
+        # Legacy PM_MCP_ compatibility
         ("PM_MCP_DOTNET_BASE_URL", ["dotnet_api", "base_url"]),
         ("PM_MCP_DOTNET_SWAGGER_URL", ["dotnet_api", "swagger_ui_url"]),
         ("PM_MCP_DOTNET_OPENAPI_URL", ["dotnet_api", "openapi_spec_url"]),

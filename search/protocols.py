@@ -13,7 +13,7 @@ class EmbeddingProvider(Protocol):
 
     @property
     def provider_name(self) -> str:
-        """Name of the embedding provider (e.g. 'mock', 'remote')."""
+        """Name of the embedding provider (e.g. 'ollama', 'remote')."""
         ...
 
     @property
@@ -24,11 +24,6 @@ class EmbeddingProvider(Protocol):
     @property
     def dimensions(self) -> int:
         """Dimensionality of the embedding vectors."""
-        ...
-
-    @property
-    def is_mock(self) -> bool:
-        """Whether this provider produces mock/synthetic embeddings."""
         ...
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
@@ -50,17 +45,12 @@ class RerankerProvider(Protocol):
 
     @property
     def provider_name(self) -> str:
-        """Name of the reranker provider (e.g. 'mock', 'remote')."""
+        """Name of the reranker provider (e.g. 'ollama', 'remote')."""
         ...
 
     @property
     def model_name(self) -> str | None:
         """Model identifier for the reranker service."""
-        ...
-
-    @property
-    def is_mock(self) -> bool:
-        """Whether this provider produces mock/synthetic rerank scores."""
         ...
 
     async def rerank(
@@ -77,4 +67,3 @@ class RerankerProvider(Protocol):
     async def check_readiness(self) -> bool:
         """Probe the reranking service to verify availability."""
         ...
-

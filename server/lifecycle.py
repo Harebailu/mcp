@@ -6,7 +6,7 @@ Handles initialization and shutdown of all server components:
 - OpenAPI specification discovery and loading
 - Domain-based YAML catalog loading and integrity validation
 - Runtime registry population
-- Multilingual semantic search, embedding cache, and candidate reranking setup
+- Multilingual semantic search, embedding cache, and candidate reranking setup via local Ollama
 - Downstream HTTP client lifecycle
 - MCP tool registration
 """
@@ -25,9 +25,9 @@ from catalog.yaml_loader import load_yaml_catalog
 from config.config import AppConfig, load_config
 from observability.json_logging import get_logger, setup_json_logging
 from schemas.errors import ErrorCode, McpToolError
-from search.embeddings.mock_provider import MockEmbeddingProvider
+from search.embeddings.ollama_provider import OllamaEmbeddingProvider
 from search.embeddings.remote_provider import RemoteEmbeddingProvider
-from search.reranking.mock_provider import MockRerankerProvider
+from search.reranking.ollama_provider import OllamaRerankerProvider
 from search.reranking.remote_provider import RemoteRerankerProvider
 from search.retrieval.embedding_cache import EmbeddingCache
 from search.retrieval.vector_index import VectorIndex
@@ -81,7 +81,9 @@ class ApplicationLifecycle:
                 "transport": self.config.mcp.transport,
                 "search_backend": self.config.search.backend,
                 "embedding_provider": self.config.search.embedding.provider,
+                "embedding_model": self.config.search.embedding.model,
                 "reranking_enabled": self.config.search.reranking.enabled,
+                "reranker_model": self.config.search.reranking.model,
             },
         )
 
@@ -180,12 +182,15 @@ class ApplicationLifecycle:
         )
         self.vector_index = VectorIndex()
 
-        # Instantiate embedding provider
+        # Instantiate embedding provider (Ollama or Remote)
         emb_cfg = self.config.search.embedding
-        if emb_cfg.provider == "mock":
-            embedding_provider = MockEmbeddingProvider(
-                model_name=emb_cfg.model or "mock-multilingual-embedding-v1",
-                dimensions=emb_cfg.dimensions or 384,
+        if emb_cfg.provider == "ollama":
+            embedding_provider = OllamaEmbeddingProvider(
+                base_url=self.config.ollama.base_url,
+                model_name=emb_cfg.model or "bge-m3:latest",
+                timeout_seconds=emb_cfg.timeout_seconds,
+                batch_size=emb_cfg.batch_size,
+                dimensions=emb_cfg.dimensions or 1024,
             )
         else:
             embedding_provider = RemoteEmbeddingProvider(
@@ -198,13 +203,15 @@ class ApplicationLifecycle:
                 dimensions=emb_cfg.dimensions,
             )
 
-        # Instantiate reranker provider (if enabled)
+        # Instantiate reranker provider (Ollama or Remote)
         rerank_cfg = self.config.search.reranking
         reranker_provider = None
         if rerank_cfg.enabled:
-            if rerank_cfg.provider == "mock":
-                reranker_provider = MockRerankerProvider(
-                    model_name=rerank_cfg.model or "mock-reranker-v1",
+            if rerank_cfg.provider == "ollama":
+                reranker_provider = OllamaRerankerProvider(
+                    base_url=self.config.ollama.base_url,
+                    model_name=rerank_cfg.model or "qwen:1.8b",
+                    timeout_seconds=rerank_cfg.timeout_seconds,
                 )
             else:
                 reranker_provider = RemoteRerankerProvider(
@@ -219,45 +226,49 @@ class ApplicationLifecycle:
         model_services_healthy = True
         service_unavail_reason = None
 
-        if self.config.startup_checks.check_embedding_service:
+        # Check embedding model availability
+        if self.config.startup_checks.check_embedding_model or self.config.startup_checks.check_ollama_service:
             emb_ready = await embedding_provider.check_readiness()
             if not emb_ready:
                 model_services_healthy = False
-                service_unavail_reason = f"Embedding service ('{embedding_provider.provider_name}') is not reachable."
+                service_unavail_reason = (
+                    f"Embedding service/model ('{embedding_provider.provider_name}': '{embedding_provider.model_name}') is not reachable or not installed."
+                )
                 if self.config.startup_checks.fail_on_service_unavailable:
-                    _logger.error_event("Embedding service health probe failed", error_code="EMBEDDING_SERVICE_UNAVAILABLE")
+                    _logger.error_event("Embedding service/model check failed", error_code="EMBEDDING_SERVICE_UNAVAILABLE")
                     raise McpToolError.from_code(
                         ErrorCode.EMBEDDING_SERVICE_UNAVAILABLE,
                         f"{service_unavail_reason} Server startup aborted.",
                     )
                 else:
                     _logger.warning_event(
-                        "Embedding service health probe failed; server will continue in catalog-only mode",
-                        details={"provider": embedding_provider.provider_name},
+                        "Embedding service check failed; server will continue in catalog-only mode",
+                        details={"provider": embedding_provider.provider_name, "model": embedding_provider.model_name},
                     )
 
-        if rerank_cfg.enabled and self.config.startup_checks.check_reranker_service and reranker_provider:
+        # Check reranker model availability
+        if rerank_cfg.enabled and self.config.startup_checks.check_reranking_model and reranker_provider:
             rerank_ready = await reranker_provider.check_readiness()
             if not rerank_ready:
                 if rerank_cfg.required:
                     model_services_healthy = False
                     service_unavail_reason = (
-                        service_unavail_reason or f"Reranker service ('{reranker_provider.provider_name}') is not reachable."
+                        service_unavail_reason or f"Reranker service/model ('{reranker_provider.provider_name}': '{reranker_provider.model_name}') is not reachable or not installed."
                     )
                     if self.config.startup_checks.fail_on_service_unavailable:
-                        _logger.error_event("Reranker service health probe failed", error_code="RERANKER_SERVICE_UNAVAILABLE")
+                        _logger.error_event("Reranker service/model check failed", error_code="RERANKER_SERVICE_UNAVAILABLE")
                         raise McpToolError.from_code(
                             ErrorCode.RERANKER_SERVICE_UNAVAILABLE,
                             f"{service_unavail_reason} Server startup aborted.",
                         )
                     else:
                         _logger.warning_event(
-                            "Required reranker service health probe failed; server will continue in catalog-only mode",
-                            details={"provider": reranker_provider.provider_name},
+                            "Required reranker service check failed; server will continue in catalog-only mode",
+                            details={"provider": reranker_provider.provider_name, "model": reranker_provider.model_name},
                         )
                 else:
                     _logger.warning_event(
-                        "Optional reranker service health probe failed; search will proceed with semantic vector ordering only"
+                        "Optional reranker service check failed; search will proceed with semantic vector ordering only"
                     )
 
         # Initialize SemanticSearchService
@@ -298,7 +309,7 @@ class ApplicationLifecycle:
 
         total_duration_ms = (time.perf_counter() - init_start) * 1000.0
         _logger.info_event(
-            "pm_mcp_server initialization complete",
+            "mcp_server initialization complete",
             duration_ms=total_duration_ms,
             outcome="ready",
             details={
@@ -312,8 +323,8 @@ class ApplicationLifecycle:
 
     async def shutdown(self) -> None:
         """Clean up all server resources."""
-        _logger.info_event("Shutting down pm_mcp_server...")
+        _logger.info_event("Shutting down mcp_server...")
         if self.api_client:
             await self.api_client.close()
             _logger.info_event(".NET API client closed")
-        _logger.info_event("pm_mcp_server shutdown complete")
+        _logger.info_event("mcp_server shutdown complete")

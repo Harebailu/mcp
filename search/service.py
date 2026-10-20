@@ -64,8 +64,8 @@ class SemanticSearchService:
 
     @property
     def search_mode(self) -> str:
-        """Active search mode ('mock' or 'remote')."""
-        return "mock" if self._embedding_provider.is_mock else "remote"
+        """Active search provider mode ('ollama' or 'remote')."""
+        return self._embedding_provider.provider_name
 
     async def initialize_vectors(
         self,
@@ -314,12 +314,6 @@ class SemanticSearchService:
 
         duration_ms = (time.perf_counter() - start_time) * 1000.0
         warning = None
-        if self._embedding_provider.is_mock:
-            warning = (
-                "[MOCK MODE] Search results were retrieved using deterministic mock embeddings "
-                "for development verification. Configure a real multilingual model for production semantic ranking."
-            )
-
         message = None
         if not final_entries:
             message = (

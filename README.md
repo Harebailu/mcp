@@ -1,18 +1,20 @@
-# `pm_mcp_server` — Generic Metadata-Driven Python MCP Server
+# `mcp_server` — Generic Metadata-Driven Python MCP Server
 
-A generic, metadata-driven Model Context Protocol (MCP) server written in Python to seamlessly integrate an AI Agent with an existing ASP.NET Core/.NET application.
+A generic, metadata-driven Model Context Protocol (MCP) server written in Python to integrate AI agents with an existing ASP.NET Core/.NET application.
 
-`pm_mcp_server` eliminates endpoint-specific tool sprawl by exposing four generic MCP tools operating against a dynamic runtime registry combining OpenAPI technical specifications with domain-partitioned YAML business metadata, multilingual semantic retrieval, candidate reranking, persistent vector caching, and structured JSON observability.
+`mcp_server` eliminates endpoint-specific tool sprawl by exposing four generic MCP tools operating against a dynamic runtime registry combining OpenAPI technical specifications with domain-partitioned YAML business metadata, local Ollama-powered multilingual semantic retrieval (`bge-m3:latest`), structured candidate reranking (`qwen:1.8b`), persistent vector caching, and structured JSON observability.
+
+> **Production Deployment Identifier**: In production environments, the service/display identifier is **`pm-mcp-server`**, while the Python package and code-level project name remains **`mcp_server`**.
 
 ---
 
 ## 1. Core Architecture and Responsibilities
 
-Instead of generating separate MCP tools for 70+ to 300+ APIs, `pm_mcp_server` exposes four generic tools:
+Instead of generating separate MCP tools for 70+ to 300+ APIs, `mcp_server` exposes four generic tools:
 
 | MCP Tool | Primary Responsibility | Agent Usage Policy |
 |---|---|---|
-| `search_apis` | Multilingual semantic retrieval (vector similarity) + contextual candidate reranking. | **First Choice / Preferred**: Agents must ALWAYS try search first. |
+| `search_apis` | Multilingual semantic retrieval (vector similarity) via `bge-m3:latest` + contextual candidate reranking via `qwen:1.8b`. | **First Choice / Preferred**: Agents must ALWAYS try search first. |
 | `get_api_schema` | Combines technical OpenAPI contract with YAML business documentation and dependency mappings. | Used after finding an API candidate to inspect required inputs. |
 | `execute_api` | Enforces read-only policy, validates arguments server-side, checks JWT expiration, and executes the call. | Used to invoke an approved operation with validated arguments. |
 | `list_all_apis` | Full-catalog paginated browser including unapproved and disabled endpoints. | **Fallback Only**: Used ONLY when search fails or is insufficient. |
@@ -38,13 +40,24 @@ In accordance with strict system invariants:
 
 ---
 
-## 3. Multilingual Semantic Search & Reranking Architecture
+## 3. Local Ollama Integration (`bge-m3:latest` & `qwen:1.8b`)
 
-API search uses a two-stage retrieval pipeline:
-1. **Stage 1 (Vector Similarity)**: Multilingual embedding model converts queries into dense vectors and matches against searchable catalog documents using cosine similarity. Supports cross-lingual matching (e.g., Korean user queries discovering English API business descriptions).
-2. **Stage 2 (Candidate Reranking)**: Reranker refines the top candidate ordering based on semantic relevance and deep business context.
-3. **Operational Eligibility Boundary**: Embeddings are calculated over searchable business metadata (`endpoint_name`, `display_name`, `description`, `use_when`, `avoid_when`, `input_descriptions`, `output_description`, `abbreviations`, `dependent_apis`). Operational status flags (`enabled`, `approval_status`, `access_mode`) are **strictly excluded** from document text and fingerprints. Status changes take effect immediately at runtime via in-memory eligibility filters without invalidating vector caches.
-4. **Keyword Search Removal**: Keyword-based search and fields (`keywords`, `synonyms`) have been completely purged.
+API search uses a two-stage local retrieval and reranking pipeline with Ollama:
+
+1. **Stage 1 (Vector Similarity via `bge-m3:latest`)**:
+   - Computes 1024-dimensional dense vectors for catalog entries and user queries.
+   - Enables cross-lingual matching (e.g., Korean user queries discovering English API business descriptions).
+   - In-memory vector store performs unit-normalized cosine similarity ranking.
+2. **Stage 2 (Candidate Reranking via `qwen:1.8b`)**:
+   - Passes user queries and retrieved candidates to local `qwen:1.8b` using a structured reranking prompt template (`search/prompts/rerank_template.txt`).
+   - Requires structured JSON output and strictly validates returned candidates against the original candidate set.
+   - Prevents hallucinated APIs, modifications to endpoint names, or alterations to HTTP verbs.
+3. **Operational Eligibility Boundary**:
+   - Embeddings are computed strictly over business metadata (`endpoint_name`, `display_name`, `description`, `use_when`, `avoid_when`, `input_descriptions`, `output_description`, `abbreviations`, `dependent_apis`).
+   - Operational status flags (`enabled`, `approval_status`, `access_mode`) are excluded from document text and fingerprints. Toggling status takes effect immediately at runtime without invalidating vector caches.
+4. **No Mock Providers & No Keyword Search**:
+   - All mock providers have been removed; retrieval connects to actual local Ollama models.
+   - Keyword search and fields (`keywords`, `synonyms`) have been completely purged.
 
 ---
 
@@ -52,7 +65,7 @@ API search uses a two-stage retrieval pipeline:
 
 Embeddings are saved to disk under `cache/api_embeddings/` using safe atomic JSON serialization:
 - Each catalog entry is fingerprinted via SHA-256 of its normalized searchable text.
-- On startup, existing cached vectors with matching fingerprints and compatible model dimensions are reused instantly without re-embedding.
+- On startup, existing cached vectors with matching fingerprints and compatible model dimensions (1024 for `bge-m3:latest`) are reused instantly without re-embedding.
 - Modified or new endpoints are incrementally embedded and updated atomically.
 
 ---
@@ -79,11 +92,10 @@ catalog/
 
 ## 6. Startup Modes and Resilience
 
-The server supports three operational modes configured in `config/config.yaml`:
+Configured in `config/config.yaml`:
 
-- **Mode A (Mock Development)**: Uses deterministic mock embedding and reranking providers. Enables end-to-end local development, tool execution, and cache lifecycle testing without external API credentials.
-- **Mode B (Strict Remote)**: Health-checks remote model endpoints during startup and fails fast if providers are unreachable.
-- **Mode C (Catalog-Only Startup)**: When `allow_catalog_only_startup: true` and `fail_on_service_unavailable: false`, the server starts even if external embedding services are offline. `search_apis` returns a descriptive `MODEL_SERVICE_UNAVAILABLE` error, while `list_all_apis`, `get_api_schema`, and `execute_api` remain fully operational.
+- **Strict Mode** (`fail_on_service_unavailable: true`): Probes Ollama reachability and verifies that both `bge-m3:latest` and `qwen:1.8b` are installed; fails fast at startup if unavailable.
+- **Catalog-Only Mode** (`allow_catalog_only_startup: true`, `fail_on_service_unavailable: false`): Server boots with valid catalog even if Ollama is offline. `search_apis` returns a descriptive `MODEL_SERVICE_UNAVAILABLE` error directing agents to `list_all_apis`, while `list_all_apis`, `get_api_schema`, and `execute_api` remain fully operational.
 
 ---
 
@@ -95,15 +107,7 @@ All operational logs are emitted to `stdout` as standardized, single-line JSON o
 
 ---
 
-## 8. Security & Policy Enforcement
-
-- **Inbound JWT Check**: Validates token expiration (`exp` claim) only. Checking `exp` without cryptographic signature verification does not verify token authenticity or issuer trust; downstream .NET services remain responsible for downstream authentication and authorization.
-- **Credential Isolation**: Inbound MCP tokens are never forwarded to downstream APIs.
-- **Read-Only Enforcement**: Server-side policy enforces `GET`/`HEAD`/`OPTIONS` verbs, `access_mode: "read_only"`, `enabled: true`, and `approval_status: "approved"`. All mutating verbs are rejected.
-
----
-
-## 9. Quick Start
+## 8. Quick Start
 
 ### Installation
 ```bash
@@ -112,12 +116,23 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+### Ensure Ollama Models are Installed
+```bash
+ollama list
+# Should display bge-m3:latest and qwen:1.8b
+```
+
 ### Run Server (Streamable HTTP on port 8000)
 ```bash
 python -m server.app
+# Or via registered entrypoint:
+mcp-server
 ```
 
 ### Inspect Catalog Drift against Live OpenAPI Spec
 ```bash
 python catalog/compare_catalog_with_openapi.py
 ```
+
+### Production Deployment
+Refer to [`docs/production-deployment.md`](docs/production-deployment.md) for full production deployment instructions.

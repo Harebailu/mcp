@@ -1,4 +1,4 @@
-"""Structured JSON logging to stdout for pm_mcp_server.
+"""Structured JSON logging to stdout for mcp_server.
 
 Outputs one JSON object per line with standardized fields.
 Ensures sensitive tokens, secrets, full request bodies, and personal
@@ -86,7 +86,7 @@ def setup_json_logging(level: str = "INFO") -> logging.Logger:
     """Configure the root logger with the JsonLogFormatter outputting to stdout."""
     numeric_level = getattr(logging, level.upper(), logging.INFO)
 
-    root = logging.getLogger("pm_mcp_server")
+    root = logging.getLogger("mcp_server")
     root.setLevel(numeric_level)
 
     # Avoid duplicate handlers on re-initialization
@@ -101,9 +101,9 @@ def setup_json_logging(level: str = "INFO") -> logging.Logger:
     return root
 
 
-def get_logger(component: str = "pm_mcp_server") -> logging.LoggerAdapter:
+def get_logger(component: str = "mcp_server") -> logging.LoggerAdapter:
     """Return a logger adapter pre-populated with the component name."""
-    base_logger = logging.getLogger("pm_mcp_server")
+    base_logger = logging.getLogger("mcp_server")
     return StructuredLogger(base_logger, {"component": component})
 
 

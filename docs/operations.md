@@ -1,8 +1,10 @@
-# Operational Runbook: `pm_mcp_server`
+# Operational Runbook: `mcp_server`
+
+`mcp_server` (production service: `pm-mcp-server`) runs on Python 3.11+ using the Model Context Protocol over Streamable HTTP or SSE.
+
+---
 
 ## 1. Starting the Server
-
-The server runs on Python 3.11+ using the MCP protocol over Streamable HTTP or SSE.
 
 ```bash
 # Activate virtual environment
@@ -10,6 +12,9 @@ The server runs on Python 3.11+ using the MCP protocol over Streamable HTTP or S
 
 # Run with default config/config.yaml
 python -m server.app
+
+# Or run via registered entrypoint
+mcp-server
 
 # Or specify a custom config file
 python -m server.app path/to/custom_config.yaml
@@ -23,36 +28,41 @@ Default HTTP endpoints:
 
 ## 2. Operational Startup Modes
 
-### Mode A: Mock Development
-- Suitable for local development and workflow verification without real model APIs.
+### Mode 1: Local Ollama Standard Mode
+- Connects to local Ollama instance at `http://localhost:11434`.
+- Uses `bge-m3:latest` for 1024-dimensional dense semantic retrieval.
+- Uses `qwen:1.8b` for structured candidate reranking.
 - Configuration:
   ```yaml
+  ollama:
+    base_url: "http://localhost:11434"
+    timeout_seconds: 60
   search:
     embedding:
-      provider: "mock"
+      provider: "ollama"
+      model: "bge-m3:latest"
     reranking:
-      provider: "mock"
+      provider: "ollama"
+      model: "qwen:1.8b"
+  startup_checks:
+    check_ollama_service: true
+    check_embedding_model: true
+    check_reranking_model: true
+    fail_on_service_unavailable: true
   ```
-- Output tag: Results from `search_apis` include `"search_mode": "mock"` and a clear warning banner.
 
-### Mode B: Strict Remote
-- Intended for production deployments with real multilingual embedding and reranking services.
+### Mode 2: Strict Mode (Fail-Fast)
+- Required when search and reranking are mandatory for serving agent queries.
+- If Ollama is unreachable or either model is missing, the server aborts startup immediately with a structured error log.
 - Configuration:
   ```yaml
-  search:
-    embedding:
-      provider: "remote"
-      base_url: "https://api.openai.com"
-      model: "text-embedding-3-small"
   startup_checks:
-    check_embedding_service: true
     fail_on_service_unavailable: true
     allow_catalog_only_startup: false
   ```
-- Startup will fail fast if the embedding endpoint is unreachable.
 
-### Mode C: Catalog-Only Resilience
-- Intended for degraded scenarios where the downstream .NET API should remain accessible even if embedding services are temporarily down.
+### Mode 3: Catalog-Only Resilience
+- Intended for degraded scenarios where the downstream .NET API should remain accessible through `list_all_apis`, `get_api_schema`, and `execute_api` even if Ollama is temporarily offline.
 - Configuration:
   ```yaml
   startup_checks:
@@ -75,7 +85,7 @@ Default HTTP endpoints:
 - Toggling `enabled` or `approval_status` **does not** regenerate embeddings.
 
 ### Manual Cache Reset:
-To force full re-vectorization, delete the files in `cache/api_embeddings/`:
+To force full re-vectorization, delete the cache directory contents:
 ```bash
 Remove-Item -Path "cache/api_embeddings/*" -Force
 ```
@@ -84,12 +94,12 @@ Remove-Item -Path "cache/api_embeddings/*" -Force
 
 ## 4. Structured JSON Log Monitoring
 
-Logs are written to `stdout` in JSON format. Example line:
+Logs are written to `stdout` in single-line JSON format. Example line:
 ```json
-{"timestamp": "2026-10-20T09:31:54.654290+00:00", "level": "INFO", "component": "SemanticSearchService", "event": "Vector index successfully built and ready", "duration_ms": 30.07, "search_mode": "mock", "candidate_count": 4}
+{"timestamp": "2026-10-20T17:12:56.644876+00:00", "level": "INFO", "component": "SemanticSearchService", "event": "Vector index successfully built and ready", "duration_ms": 12395.96, "search_mode": "ollama", "candidate_count": 4}
 ```
 
 Key fields to monitor:
-- `outcome`: `"success"`, `"tool_error"`, `"internal_error"`, `"cache_hit"`, `"cache_miss"`.
+- `outcome`: `"ready"`, `"success"`, `"tool_error"`, `"internal_error"`, `"cache_hit"`, `"cache_miss"`.
 - `error_code`: Machine-readable error code if a failure occurred.
-- `duration_ms`: Execution latency for tool operations.
+- `duration_ms`: Execution latency for tool operations and startup steps.

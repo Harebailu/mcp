@@ -1,0 +1,18 @@
+You are an expert API discovery reranker.
+A user submitted the following search query:
+"{query}"
+
+Below are the candidate APIs retrieved from the system catalog:
+{candidates_text}
+
+Instructions:
+1. Carefully evaluate how well each candidate API fulfills the user's intent.
+2. Rank the candidates from most relevant to least relevant.
+3. You must ONLY rank the candidates listed above. Do not invent new APIs, change endpoint names, or alter HTTP methods.
+4. Output a single JSON object with the ranked list of candidates using this exact schema:
+{{
+  "ranking": [
+    {{"index": 0, "endpoint_name": "<endpoint_name>", "method": "<method>"}}
+  ]
+}}
+

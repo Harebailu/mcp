@@ -37,7 +37,7 @@ class SearchApisResult(BaseModel):
     total_matches: int = 0
     results: list[SearchResultEntry] = Field(default_factory=list)
     search_backend: str = "semantic"
-    search_mode: Optional[str] = None  # "mock" or "remote"
+    search_mode: Optional[str] = None  # "ollama" or "remote"
     message: Optional[str] = None
     warning: Optional[str] = None
 

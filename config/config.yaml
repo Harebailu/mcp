@@ -1,5 +1,5 @@
 application:
-  name: "pm_mcp_server"
+  name: "mcp_server"
   environment: "development"
 
 dotnet_api:
@@ -15,6 +15,10 @@ mcp:
   port: 8000
   transport: "streamable_http"
 
+ollama:
+  base_url: "http://localhost:11434"
+  timeout_seconds: 60
+
 search:
   backend: "semantic"
   max_results: 5
@@ -22,25 +26,19 @@ search:
   minimum_score: null
 
   embedding:
-    provider: "mock"
-    base_url: null
-    endpoint_path: null
-    model: "REPLACE_WITH_CONFIGURED_MULTILINGUAL_MODEL"
-    api_key_env_var: "EMBEDDING_API_KEY"
-    timeout_seconds: 20
+    provider: "ollama"
+    model: "bge-m3:latest"
+    dimensions: 1024
     batch_size: 32
-    dimensions: null
+    timeout_seconds: 60
 
   reranking:
     enabled: true
-    provider: "mock"
-    base_url: null
-    endpoint_path: null
-    model: null
-    api_key_env_var: "RERANKER_API_KEY"
-    timeout_seconds: 20
-    candidate_limit: 20
+    provider: "ollama"
+    model: "qwen:1.8b"
     required: true
+    candidate_limit: 20
+    timeout_seconds: 60
 
   llm:
     enabled: false
@@ -60,9 +58,9 @@ cache:
 
 startup_checks:
   validate_catalog: true
-  check_embedding_service: true
-  check_reranker_service: true
-  check_llm_service_when_enabled: true
+  check_ollama_service: true
+  check_embedding_model: true
+  check_reranking_model: true
   fail_on_service_unavailable: true
   allow_catalog_only_startup: false
 

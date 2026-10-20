@@ -23,12 +23,6 @@ class BaseRerankerProvider(ABC):
         """Model identifier."""
         ...
 
-    @property
-    @abstractmethod
-    def is_mock(self) -> bool:
-        """Whether this provider produces mock data."""
-        ...
-
     @abstractmethod
     async def rerank(
         self,
@@ -50,4 +44,3 @@ class BaseRerankerProvider(ABC):
     async def check_readiness(self) -> bool:
         """Verify provider availability."""
         ...
-
