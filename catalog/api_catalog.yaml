@@ -1,0 +1,131 @@
+catalog_version: '1.0'
+apis:
+- endpoint_name: PostApiAuthLogin
+  method: POST
+  path: /api/auth/login
+  domain: login
+  display_name: User Authentication Login
+  description: 'Authenticates a user or superuser with username and password, returning a JWT bearer token.
+
+    '
+  use_when:
+  - The user needs to authenticate and obtain an authorization token.
+  avoid_when:
+  - The user already has a valid non-expired JWT.
+  keywords:
+  - login
+  - authenticate
+  - token
+  - credentials
+  - signin
+  synonyms:
+  - log in
+  - sign in
+  abbreviations:
+  - auth
+  input_descriptions:
+    isSuperUser: Query flag indicating whether the authenticating user is a superuser.
+    userName: User name or identifier.
+    password: Password for the account.
+  output_description: 'Returns HTTP 200 OK with the generated JWT bearer token and expiration details.
+
+    '
+  dependent_apis: []
+  enabled: false
+  approval_status: pending_review
+  access_mode: read_only
+- endpoint_name: PostApiAuthLogout
+  method: POST
+  path: /api/auth/logout
+  domain: login
+  display_name: User Logout
+  description: 'Terminates the current user session and invalidates active session tokens.
+
+    '
+  use_when:
+  - The user explicitly logs out of the session.
+  avoid_when:
+  - Active sessions are still needed for ongoing operations.
+  keywords:
+  - logout
+  - signout
+  - terminate session
+  synonyms:
+  - log out
+  - sign out
+  abbreviations: []
+  output_description: 'Returns HTTP 200 OK confirming session termination.
+
+    '
+  dependent_apis: []
+  enabled: false
+  approval_status: pending_review
+  access_mode: read_only
+- endpoint_name: PostApiAuthRefresh
+  method: POST
+  path: /api/auth/refresh
+  domain: login
+  display_name: Refresh Authentication Token
+  description: 'Refreshes an expiring JWT bearer token to extend session validity.
+
+    '
+  use_when:
+  - The current JWT bearer token is nearing its expiration time.
+  avoid_when:
+  - No active token exists or user credentials have changed.
+  keywords:
+  - refresh
+  - extend token
+  - renew
+  synonyms:
+  - renew token
+  abbreviations: []
+  output_description: 'Returns HTTP 200 OK with a refreshed JWT bearer token.
+
+    '
+  dependent_apis:
+  - endpoint_name: PostApiAuthLogin
+    method: POST
+    purpose: Initial authentication to acquire the original token to refresh.
+  enabled: false
+  approval_status: pending_review
+  access_mode: read_only
+- endpoint_name: GetApiSuperusers
+  method: GET
+  path: /api/superusers
+  domain: superuser
+  display_name: Get Superusers List
+  description: 'Retrieves the complete list of registered superusers and administrative accounts from AgriTracker.
+
+    '
+  use_when:
+  - The agent or user needs to discover, verify, or inspect administrative accounts.
+  - Listing registered superuser identities.
+  avoid_when:
+  - Querying standard non-administrative user accounts.
+  - Modifying superuser account details.
+  keywords:
+  - superusers
+  - administrators
+  - admin list
+  - system admin
+  - su
+  - accounts
+  synonyms:
+  - admins
+  - root users
+  abbreviations:
+  - su
+  input_descriptions: {}
+  output_description: 'Returns HTTP 200 OK with a list of superuser identities and their metadata.
+
+    '
+  dependent_apis:
+  - endpoint_name: PostApiAuthLogin
+    method: POST
+    purpose: 'Authenticate and obtain credentials if required for superuser endpoint access.
+
+      '
+  enabled: true
+  approval_status: approved
+  access_mode: read_only

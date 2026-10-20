@@ -1,0 +1,48 @@
+application:
+  name: "pm_mcp_server"
+  environment: "development"
+
+dotnet_api:
+  base_url: "http://localhost:5273"
+  swagger_ui_url: "http://localhost:5273/swagger/index.html"
+  openapi_spec_url: null
+  timeout_seconds: 30
+  max_response_bytes: 1048576
+  max_redirects: 3
+
+mcp:
+  host: "127.0.0.1"
+  port: 8000
+  transport: "streamable_http"
+
+search:
+  backend: "yaml_keyword"
+  max_results: 5
+  max_results_limit: 20
+
+rag:
+  enabled: false
+  llm:
+    provider: null
+    base_url: null
+    model: null
+    api_key_env_var: "LLM_API_KEY"
+    timeout_seconds: 20
+  embeddings:
+    provider: null
+    base_url: null
+    model: null
+    dimensions: null
+    api_key_env_var: "EMBEDDING_API_KEY"
+    timeout_seconds: 20
+  vector_store:
+    provider: null
+    collection_name: null
+  retrieval:
+    top_k: 5
+    similarity_threshold: null
+
+authentication:
+  enabled: true
+  expiration_claim: "exp"
+  clock_skew_seconds: 0
