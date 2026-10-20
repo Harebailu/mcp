@@ -1,84 +1,95 @@
-# Operations Guide: `pm_mcp_server`
+# Operational Runbook: `pm_mcp_server`
 
-## 1. Prerequisites and Installation
+## 1. Starting the Server
 
-- Python 3.11+
-- Downstream ASP.NET Core API running (e.g. `http://localhost:5273`)
+The server runs on Python 3.11+ using the MCP protocol over Streamable HTTP or SSE.
 
-### Installation
-From the project root (`pm_mcp_server/`):
 ```bash
-pip install -r requirements.txt
-```
+# Activate virtual environment
+.venv\Scripts\activate
 
----
-
-## 2. Running the Server
-
-### Default Execution (Streamable HTTP)
-Using `python`:
-```bash
+# Run with default config/config.yaml
 python -m server.app
-```
-Or directly:
-```bash
-python server/app.py
-```
-Or with custom config path:
-```bash
-python server/app.py /path/to/custom_config.yaml
+
+# Or specify a custom config file
+python -m server.app path/to/custom_config.yaml
 ```
 
-The server listens on `http://127.0.0.1:8000/mcp` by default.
+Default HTTP endpoints:
+- Host: `http://127.0.0.1:8000`
+- Transport endpoint: `http://127.0.0.1:8000/mcp` (Streamable HTTP)
 
-### Running with STDIO Transport
-For local CLI or direct LLM tool calling via pipe:
+---
+
+## 2. Operational Startup Modes
+
+### Mode A: Mock Development
+- Suitable for local development and workflow verification without real model APIs.
+- Configuration:
+  ```yaml
+  search:
+    embedding:
+      provider: "mock"
+    reranking:
+      provider: "mock"
+  ```
+- Output tag: Results from `search_apis` include `"search_mode": "mock"` and a clear warning banner.
+
+### Mode B: Strict Remote
+- Intended for production deployments with real multilingual embedding and reranking services.
+- Configuration:
+  ```yaml
+  search:
+    embedding:
+      provider: "remote"
+      base_url: "https://api.openai.com"
+      model: "text-embedding-3-small"
+  startup_checks:
+    check_embedding_service: true
+    fail_on_service_unavailable: true
+    allow_catalog_only_startup: false
+  ```
+- Startup will fail fast if the embedding endpoint is unreachable.
+
+### Mode C: Catalog-Only Resilience
+- Intended for degraded scenarios where the downstream .NET API should remain accessible even if embedding services are temporarily down.
+- Configuration:
+  ```yaml
+  startup_checks:
+    fail_on_service_unavailable: false
+    allow_catalog_only_startup: true
+  ```
+- The server starts normally. `search_apis` responds with `MODEL_SERVICE_UNAVAILABLE` guiding the agent to use `list_all_apis`. `get_api_schema` and `execute_api` operate normally.
+
+---
+
+## 3. Persistent Vector Cache Operations
+
+- Directory: `cache/api_embeddings/`
+- Manifest: `cache/api_embeddings/manifest.json`
+- Vectors: `cache/api_embeddings/vectors.json`
+
+### Cache Invalidation:
+- Changing model name, provider, or vector dimensions automatically triggers cache invalidation and re-embedding.
+- Modifying business descriptions or searchable text in a domain YAML file updates only the affected endpoint's vector.
+- Toggling `enabled` or `approval_status` **does not** regenerate embeddings.
+
+### Manual Cache Reset:
+To force full re-vectorization, delete the files in `cache/api_embeddings/`:
 ```bash
-PM_MCP_TRANSPORT=stdio python -m server.app
+Remove-Item -Path "cache/api_embeddings/*" -Force
 ```
 
 ---
 
-## 3. Catalog Synchronization & Bootstrapping
+## 4. Structured JSON Log Monitoring
 
-To bootstrap or refresh `catalog/api_catalog.yaml` from the live Swagger UI:
-```bash
-python catalog/sync_from_openapi.py
+Logs are written to `stdout` in JSON format. Example line:
+```json
+{"timestamp": "2026-10-20T09:31:54.654290+00:00", "level": "INFO", "component": "SemanticSearchService", "event": "Vector index successfully built and ready", "duration_ms": 30.07, "search_mode": "mock", "candidate_count": 4}
 ```
-This discovers the actual OpenAPI JSON, parses all operations, updates paths, preserves manually curated descriptions/dependencies, and outputs a summary of added/updated/removed APIs.
 
----
-
-## 4. Connecting MCP Clients
-
-### Connecting via Streamable HTTP
-Clients supporting the remote Model Context Protocol can connect to:
-```
-http://127.0.0.1:8000/mcp
-```
-All four tools will be advertised:
-1. `search_apis`
-2. `get_api_schema`
-3. `execute_api`
-4. `list_all_apis`
-
-### Client Discovery Workflow
-1. The AI Agent initiates discovery with `search_apis(query="find superusers")`.
-2. The agent inspects candidates returned in JSON format.
-3. If search results are ambiguous or insufficient, the agent calls `list_all_apis(page=1)`.
-4. The agent retrieves the full technical contract with `get_api_schema(endpoint_name="GetApiSuperusers", method="GET")`.
-5. The agent executes the approved operation with `execute_api(endpoint_name="GetApiSuperusers", method="GET")`.
-
----
-
-## 5. Troubleshooting and Diagnostics
-
-| Symptom | Cause | Solution |
-|---|---|---|
-| `OPENAPI_UNREACHABLE` | Downstream Swagger UI URL cannot be reached | Check that the ASP.NET Core service is running and accessible at `dotnet_api.swagger_ui_url`. Verify Docker network or host routing. |
-| `READ_ONLY_VIOLATION` | Attempted execution of POST/PUT/DELETE, or endpoint marked `read_write` | Only explicitly approved read-only operations with `access_mode: "read_only"` can be executed. |
-| `UNAPPROVED_ENDPOINT` | Endpoint has `approval_status: "pending_review"` | Inspect `catalog/api_catalog.yaml` and change `approval_status: "approved"` and `enabled: true` after safety review. |
-| `TOKEN_EXPIRED` | Inbound MCP Bearer token has expired | Refresh the JWT. Check `authentication.clock_skew_seconds` if minor clock drift exists between systems. |
-| `RESPONSE_TOO_LARGE` / Truncated | Downstream response exceeds `max_response_bytes` | Increase `dotnet_api.max_response_bytes` in `config.yaml` if larger payloads are expected. |
-| `TIMEOUT` | Downstream API did not respond within `timeout_seconds` | Adjust `dotnet_api.timeout_seconds` or optimize downstream database queries. |
-
+Key fields to monitor:
+- `outcome`: `"success"`, `"tool_error"`, `"internal_error"`, `"cache_hit"`, `"cache_miss"`.
+- `error_code`: Machine-readable error code if a failure occurred.
+- `duration_ms`: Execution latency for tool operations.

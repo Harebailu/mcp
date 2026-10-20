@@ -16,31 +16,60 @@ mcp:
   transport: "streamable_http"
 
 search:
-  backend: "yaml_keyword"
+  backend: "semantic"
   max_results: 5
-  max_results_limit: 20
+  candidate_limit: 20
+  minimum_score: null
 
-rag:
-  enabled: false
+  embedding:
+    provider: "mock"
+    base_url: null
+    endpoint_path: null
+    model: "REPLACE_WITH_CONFIGURED_MULTILINGUAL_MODEL"
+    api_key_env_var: "EMBEDDING_API_KEY"
+    timeout_seconds: 20
+    batch_size: 32
+    dimensions: null
+
+  reranking:
+    enabled: true
+    provider: "mock"
+    base_url: null
+    endpoint_path: null
+    model: null
+    api_key_env_var: "RERANKER_API_KEY"
+    timeout_seconds: 20
+    candidate_limit: 20
+    required: true
+
   llm:
+    enabled: false
     provider: null
     base_url: null
+    endpoint_path: null
     model: null
     api_key_env_var: "LLM_API_KEY"
     timeout_seconds: 20
-  embeddings:
-    provider: null
-    base_url: null
-    model: null
-    dimensions: null
-    api_key_env_var: "EMBEDDING_API_KEY"
-    timeout_seconds: 20
-  vector_store:
-    provider: null
-    collection_name: null
-  retrieval:
-    top_k: 5
-    similarity_threshold: null
+
+  query_enrichment:
+    enabled: false
+
+cache:
+  enabled: true
+  directory: "cache/api_embeddings"
+
+startup_checks:
+  validate_catalog: true
+  check_embedding_service: true
+  check_reranker_service: true
+  check_llm_service_when_enabled: true
+  fail_on_service_unavailable: true
+  allow_catalog_only_startup: false
+
+logging:
+  level: "INFO"
+  format: "json"
+  output: "stdout"
 
 authentication:
   enabled: true

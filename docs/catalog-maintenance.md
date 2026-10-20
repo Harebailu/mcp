@@ -1,54 +1,45 @@
 # Catalog Maintenance Guide: `pm_mcp_server`
 
-## 1. Catalog Architecture
+## 1. Directory Structure
 
-The API inventory is maintained in `catalog/api_catalog.yaml`. It represents the curated business metadata, execution enablement status, and inter-API dependency graph.
+The API catalog is organized into domain-specific files referenced by a root manifest:
 
-### Key Principles
-1. **Uniqueness**: Every entry is uniquely identified by the composite key `(endpoint_name, method)`. No numeric or UUID identifiers are generated or accepted.
-2. **OpenAPI as Technical Authority**: Parameter types, locations, and schemas come from the discovered OpenAPI JSON document.
-3. **YAML as Business & Policy Authority**: Business descriptions, use cases, domain categorization, dependencies, and approval states are maintained in YAML.
-4. **Safety by Default**: Newly synchronized operations default to `enabled: false` and `approval_status: "pending_review"`. They cannot be executed until reviewed and approved.
+```
+catalog/
+├── api_catalog.yaml         # Root manifest
+├── domains/
+│   ├── superuser.yaml       # Superuser management operations
+│   └── auth.yaml            # Authentication endpoints
+├── catalog_validator.py     # Integrity validation engine
+├── compare_catalog_with_openapi.py  # Read-only drift report tool
+└── sync_from_openapi.py     # Bootstrap / sync utility
+```
 
----
-
-## 2. Structure of a Catalog Entry
-
+### Manifest Format (`catalog/api_catalog.yaml`)
 ```yaml
 catalog_version: "1.0"
+domain_files:
+  - "domains/superuser.yaml"
+  - "domains/auth.yaml"
+```
 
+### Domain File Format (`catalog/domains/<domain>.yaml`)
+```yaml
+domain: "superuser"
 apis:
   - endpoint_name: "GetApiSuperusers"
     method: "GET"
     path: "/api/superusers"
-    domain: "superuser"
-    display_name: "Get Superusers List"
-
-    description: >
-      Retrieves the list of registered superusers from AgriTracker.
-
+    operation_id: null
+    display_name: "Get Superusers"
+    description: "Retrieve list of superuser accounts in the system."
     use_when:
-      - "The agent or user needs to verify administrative privileges or list superusers."
-
+      - "Admin requests information about superusers"
     avoid_when:
-      - "Normal user account inquiries."
-
-    keywords:
-      - "superusers"
-      - "administrators"
-      - "admin list"
-
-    synonyms:
-      - "admins"
-
+      - "Routine unprivileged user queries"
     abbreviations:
       - "su"
-
-    output_description: >
-      Returns a list of superuser objects with their usernames and roles.
-
-    dependent_apis: []
-
+      - "admin"
     enabled: true
     approval_status: "approved"
     access_mode: "read_only"
@@ -56,62 +47,40 @@ apis:
 
 ---
 
-## 3. Catalog Synchronization & Refresh
+## 2. Catalog Invariants & Validation Rules
 
-`pm_mcp_server` includes an automated synchronization tool (`catalog/sync_from_openapi.py`) that syncs the YAML catalog against the live OpenAPI specification.
+1. **Composite Key Uniqueness**: `(endpoint_name, method)` must be unique across all domain files.
+2. **Domain Inheritance**: Entries inherit the containing file's `domain` unless matching explicitly.
+3. **Approval and Enablement**:
+   - `enabled: true` is strictly permitted **only** when `approval_status: "approved"`.
+   - `enabled: false` is required when `approval_status` is `pending_review` or `rejected`.
+4. **Allowed Methods**: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`.
+5. **Allowed Access Modes**: `read_only`, `read_write`.
+6. **No Keywords/Synonyms**: Legacy `keywords` and `synonyms` fields are forbidden and rejected by the loader. Search is strictly multilingual semantic retrieval.
 
-### Running Synchronization
+---
 
-From project root:
+## 3. Drift Analysis (`compare_catalog_with_openapi.py`)
+
+Run this read-only utility to compare the catalog against the live OpenAPI specification without making any file modifications:
+
+```bash
+python catalog/compare_catalog_with_openapi.py
+```
+
+The script reports:
+- Number of matched operations.
+- Operations present in OpenAPI but missing from catalog.
+- Operations present in catalog but removed from OpenAPI.
+- Path or method discrepancies.
+
+---
+
+## 4. Bootstrapping / Refreshing (`sync_from_openapi.py`)
+
+To bootstrap a new catalog or update an existing inventory from live OpenAPI:
 ```bash
 python catalog/sync_from_openapi.py
 ```
-
-### Sync Rules:
-1. **New Endpoints**: Added with `enabled: false` and `approval_status: "pending_review"`.
-2. **Existing Endpoints**:
-   - Manually curated business descriptions, `use_when`, `keywords`, and `dependent_apis` are **preserved**.
-   - Changes to endpoint paths in OpenAPI are updated and flagged in the sync report.
-3. **Removed Endpoints**: Endpoints present in YAML but absent in OpenAPI are preserved and highlighted in the sync report for human review.
-4. **Endpoint Name Derivation**:
-   - Uses `operationId` if present and unique across the specification.
-   - If `operationId` is missing, generates a deterministic PascalCase name from HTTP method and path segments (e.g. `GET /api/superusers` -> `GetApiSuperusers`).
-   - If an `operationId` is duplicated across distinct paths, disambiguates using path-derived names.
-
----
-
-## 4. Modeling API Dependencies (`dependent_apis`)
-
-When an endpoint requires a value produced by another endpoint (for example, a `projectId` or `jobId`), define this relationship in `dependent_apis`:
-
-```yaml
-dependent_apis:
-  - endpoint_name: "SearchProjects"
-    method: "GET"
-    purpose: >
-      Retrieve the project identifier required by this endpoint.
-    output_to_input:
-      "response.projectId": "path_params.projectId"
-```
-
-### Important Execution Rules:
-- The server **does not automatically execute chains of dependent APIs**.
-- The dependency graph is exposed via `search_apis` (hints) and `get_api_schema` (detailed guidance).
-- The AI agent discovers the dependency, calls the upstream endpoint using `execute_api`, extracts the value, and subsequently calls the downstream target endpoint.
-- Cycles in `dependent_apis` are detected during startup validation and prevent the server from starting.
-
----
-
-## 5. Future Catalog Splitting
-
-While the initial implementation uses a single canonical file `catalog/api_catalog.yaml`, the loader abstraction in `catalog/yaml_loader.py` is isolated so that domain splitting can be added seamlessly:
-```
-catalog/
-├── api_catalog.yaml
-└── domains/
-    ├── projects.yaml
-    ├── superusers.yaml
-    └── jobs.yaml
-```
-The runtime `ApiRegistry` and MCP tools will continue using the identical composite key `(endpoint_name, method)` regardless of how YAML files are organized on disk.
-
+- Preserves all curated descriptions, use cases, and dependencies.
+- Discovered endpoints default to `enabled: false`, `approval_status: "pending_review"`, and `access_mode: "read_only"`.

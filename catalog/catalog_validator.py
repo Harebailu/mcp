@@ -1,13 +1,17 @@
 """Validate the API catalog for uniqueness, route mappings,
-dependency integrity, and metadata consistency.
+dependency integrity, enumeration constraints, and status consistency.
 
 Validation rules:
-1. Composite key (endpoint_name, method) must be unique.
-2. Endpoint paths must be non-empty.
-3. Dependency references must resolve to existing catalog entries.
-4. Cyclic dependencies must be detected and reported.
-5. Paths and methods must correspond to the intended OpenAPI operations when available.
-6. Inconsistent path/operation_id mappings are rejected.
+1. Composite key (endpoint_name, method) must be unique across all domain files.
+2. Endpoint paths and names must be non-empty.
+3. method must be one of GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.
+4. access_mode must be read_only or read_write.
+5. approval_status must be pending_review, approved, or rejected.
+6. enabled must be a strict boolean; enabled=true is only allowed when approval_status='approved'.
+7. Dependency references must resolve to existing catalog entries.
+8. Cyclic dependencies must be detected and reported.
+9. Paths and methods must correspond to intended OpenAPI operations when available.
+10. Inconsistent path/operation_id mappings are rejected.
 """
 
 from __future__ import annotations
@@ -16,6 +20,10 @@ from typing import Optional
 
 from schemas.catalog import ApiCatalog, CatalogEntry
 from schemas.api_contract import ResolvedOperation
+
+_ALLOWED_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+_ALLOWED_APPROVAL_STATUSES = frozenset({"pending_review", "approved", "rejected"})
+_ALLOWED_ACCESS_MODES = frozenset({"read_only", "read_write"})
 
 
 class ValidationResult:
@@ -54,10 +62,10 @@ def validate_catalog(
     catalog: ApiCatalog,
     openapi_operations: Optional[dict[tuple[str, str], ResolvedOperation]] = None,
 ) -> ValidationResult:
-    """Run all catalog validations.
+    """Run all catalog validations across all domain-loaded entries.
 
     Args:
-        catalog: The loaded API catalog.
+        catalog: The loaded API catalog (combined domain entries).
         openapi_operations: Resolved OpenAPI operations keyed by (path, METHOD),
                            used for cross-validation.
 
@@ -67,7 +75,8 @@ def validate_catalog(
     result = ValidationResult()
 
     _check_composite_key_uniqueness(catalog, result)
-    _check_required_fields(catalog, result)
+    _check_required_fields_and_constraints(catalog, result)
+    _check_status_consistency(catalog, result)
     _check_dependency_references(catalog, result)
     _check_cyclic_dependencies(catalog, result)
 
@@ -80,44 +89,77 @@ def validate_catalog(
 def _check_composite_key_uniqueness(
     catalog: ApiCatalog, result: ValidationResult
 ) -> None:
-    """Ensure each (endpoint_name, method) is unique."""
+    """Ensure each (endpoint_name, method) is unique across all domain files."""
     seen: dict[tuple[str, str], int] = {}
     for idx, entry in enumerate(catalog.apis):
         key = entry.composite_key
         if key in seen:
             result.add_error(
-                f"Duplicate composite key {key} at entries "
+                f"Duplicate composite identity {key} at entries "
                 f"[{seen[key]}] and [{idx}]."
             )
         else:
             seen[key] = idx
 
 
-def _check_required_fields(
+def _check_required_fields_and_constraints(
     catalog: ApiCatalog, result: ValidationResult
 ) -> None:
-    """Verify required fields are present and valid."""
+    """Verify required fields are present and enumeration constraints are satisfied."""
     for entry in catalog.apis:
-        if not entry.endpoint_name.strip():
+        if not entry.endpoint_name or not entry.endpoint_name.strip():
             result.add_error("Entry with empty endpoint_name found.")
-        if not entry.path.strip():
+        if not entry.path or not entry.path.strip():
             result.add_error(
                 f"Entry '{entry.endpoint_name}' ({entry.method}) has an empty path."
             )
-        if not entry.method.strip():
+        if not entry.display_name or not entry.display_name.strip():
             result.add_error(
-                f"Entry '{entry.endpoint_name}' has an empty method."
+                f"Entry '{entry.endpoint_name}' ({entry.method}) has an empty display_name."
+            )
+        if not entry.description or not entry.description.strip():
+            result.add_error(
+                f"Entry '{entry.endpoint_name}' ({entry.method}) has an empty description."
             )
 
-        # Warn on missing business metadata
-        if not entry.description:
-            result.add_warning(
-                f"Entry '{entry.endpoint_name}' ({entry.method}) has no description. "
-                f"Mark for review."
+        # Method validation
+        if entry.method.upper() not in _ALLOWED_METHODS:
+            result.add_error(
+                f"Entry '{entry.endpoint_name}' has invalid method '{entry.method}'. "
+                f"Allowed: {sorted(_ALLOWED_METHODS)}."
             )
-        if not entry.display_name:
-            result.add_warning(
-                f"Entry '{entry.endpoint_name}' ({entry.method}) has no display_name."
+
+        # Access mode validation
+        if entry.access_mode not in _ALLOWED_ACCESS_MODES:
+            result.add_error(
+                f"Entry '{entry.endpoint_name}' has invalid access_mode '{entry.access_mode}'. "
+                f"Allowed: {sorted(_ALLOWED_ACCESS_MODES)}."
+            )
+
+        # Approval status validation
+        if entry.approval_status not in _ALLOWED_APPROVAL_STATUSES:
+            result.add_error(
+                f"Entry '{entry.endpoint_name}' has invalid approval_status '{entry.approval_status}'. "
+                f"Allowed: {sorted(_ALLOWED_APPROVAL_STATUSES)}."
+            )
+
+        # Strict boolean check for enabled
+        if not isinstance(entry.enabled, bool):
+            result.add_error(
+                f"Entry '{entry.endpoint_name}' has non-boolean enabled value: {entry.enabled}."
+            )
+
+
+def _check_status_consistency(
+    catalog: ApiCatalog, result: ValidationResult
+) -> None:
+    """Ensure enabled: true is ONLY permitted when approval_status='approved'."""
+    for entry in catalog.apis:
+        if entry.enabled and entry.approval_status != "approved":
+            result.add_error(
+                f"Entry '{entry.endpoint_name}' ({entry.method}) has enabled=true but "
+                f"approval_status='{entry.approval_status}'. "
+                f"enabled=true is only allowed when approval_status='approved'."
             )
 
 
@@ -144,7 +186,6 @@ def _check_cyclic_dependencies(
     catalog: ApiCatalog, result: ValidationResult
 ) -> None:
     """Detect cyclic dependency chains."""
-    # Build adjacency list
     adj: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for entry in catalog.apis:
         key = entry.composite_key
@@ -154,7 +195,6 @@ def _check_cyclic_dependencies(
                 dep_key = (dep.endpoint_name, dep.method.upper())
                 adj[key].append(dep_key)
 
-    # DFS-based cycle detection
     WHITE, GRAY, BLACK = 0, 1, 2
     color: dict[tuple[str, str], int] = {k: WHITE for k in adj}
 
@@ -165,7 +205,6 @@ def _check_cyclic_dependencies(
             if neighbor not in color:
                 continue
             if color[neighbor] == GRAY:
-                # Found a cycle
                 cycle_start = path.index(neighbor)
                 cycle = path[cycle_start:] + [neighbor]
                 cycle_str = " -> ".join(f"{e[0]}({e[1]})" for e in cycle)
@@ -198,7 +237,6 @@ def _check_openapi_mapping(
 
         op = openapi_operations[expected_key]
 
-        # If operation_id is set, verify it matches
         if entry.operation_id and op.operation_id:
             if entry.operation_id != op.operation_id:
                 result.add_error(

@@ -20,8 +20,11 @@ project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+from observability.json_logging import get_logger
 from server.lifecycle import ApplicationLifecycle
 from server.transport import get_transport_config, get_transport_type
+
+_logger = get_logger("server.app")
 
 
 def run_server(config_path: str | None = None) -> None:
@@ -37,29 +40,31 @@ def run_server(config_path: str | None = None) -> None:
         transport_type = get_transport_type(lifecycle.config)
         transport_config = get_transport_config(lifecycle.config)
 
-        print(f"\n[server] Starting MCP server '{lifecycle.config.application.name}'...")
-        print(f"[server] Configured transport: {lifecycle.config.mcp.transport} (mode: {transport_type})")
-        if transport_type == "streamable-http":
-            print(f"[server] Remote HTTP Host: {lifecycle.config.mcp.host}:{lifecycle.config.mcp.port}")
-            print(f"[server] Endpoint: http://{lifecycle.config.mcp.host}:{lifecycle.config.mcp.port}/mcp")
-        elif transport_type == "sse":
-            print(f"[server] Remote HTTP Host: {lifecycle.config.mcp.host}:{lifecycle.config.mcp.port}")
-            print(f"[server] SSE Endpoint: http://{lifecycle.config.mcp.host}:{lifecycle.config.mcp.port}/sse")
+        _logger.info_event(
+            "Starting MCP server transport",
+            details={
+                "server_name": lifecycle.config.application.name,
+                "transport": lifecycle.config.mcp.transport,
+                "mode": transport_type,
+                "host": lifecycle.config.mcp.host,
+                "port": lifecycle.config.mcp.port,
+            },
+        )
 
         transport = transport_config.pop("transport")
         mcp.run(transport=transport, **transport_config)
 
     except KeyboardInterrupt:
-        print("\n[server] Server interrupted by user.")
+        _logger.info_event("Server interrupted by user")
     except Exception as e:
-        print(f"\n[server] Fatal error during startup or execution: {e}")
+        _logger.error_event("Fatal error during startup or execution", details={"error": str(e)})
         raise
     finally:
-        print("\n[server] Cleaning up resources...")
+        _logger.info_event("Cleaning up server resources...")
         try:
             loop.run_until_complete(lifecycle.shutdown())
         except Exception as e:
-            print(f"[server] Error during shutdown cleanup: {e}")
+            _logger.error_event("Error during shutdown cleanup", details={"error": str(e)})
         finally:
             loop.close()
 

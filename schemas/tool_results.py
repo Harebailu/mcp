@@ -26,7 +26,9 @@ class SearchResultEntry(BaseModel):
     dependency_summary: Optional[list[str]] = None
     enabled: bool = False
     approval_status: str = "pending_review"
-    relevance_score: float = 0.0
+    relevance_score: Optional[float] = None
+    semantic_score: Optional[float] = None
+    rerank_score: Optional[float] = None
 
 
 class SearchApisResult(BaseModel):
@@ -34,8 +36,10 @@ class SearchApisResult(BaseModel):
     query: str
     total_matches: int = 0
     results: list[SearchResultEntry] = Field(default_factory=list)
-    search_backend: str = "yaml_keyword"
+    search_backend: str = "semantic"
+    search_mode: Optional[str] = None  # "mock" or "remote"
     message: Optional[str] = None
+    warning: Optional[str] = None
 
 
 class ApiSchemaResult(BaseModel):

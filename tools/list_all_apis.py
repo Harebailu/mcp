@@ -10,14 +10,16 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from typing import Any
 
-from server.mcp_compat import FastMCP
-
-from catalog.registry import ApiRegistry
+from observability.json_logging import get_logger
+from schemas.errors import McpToolError
 from schemas.tool_arguments import ListAllApisArgs
 from schemas.tool_results import CatalogListEntry, ListAllApisResult
-from schemas.errors import McpToolError
+from server.mcp_compat import FastMCP
+
+_logger = get_logger("tools.list_all_apis")
 
 
 def register_list_all_apis(mcp: FastMCP, registry: ApiRegistry) -> None:
@@ -50,6 +52,7 @@ def register_list_all_apis(mcp: FastMCP, registry: ApiRegistry) -> None:
         Returns:
             JSON string with paginated catalog entries.
         """
+        start_time = time.perf_counter()
         try:
             args = ListAllApisArgs(
                 page=page,
@@ -114,10 +117,41 @@ def register_list_all_apis(mcp: FastMCP, registry: ApiRegistry) -> None:
                 ),
             )
 
+            duration_ms = (time.perf_counter() - start_time) * 1000.0
+            _logger.info_event(
+                "list_all_apis executed",
+                tool_name="list_all_apis",
+                page=args.page,
+                page_size=args.page_size,
+                domain=args.domain,
+                total_count=total_count,
+                returned_count=len(entries),
+                duration_ms=duration_ms,
+                outcome="success",
+            )
             return json.dumps(result.model_dump(exclude_none=True), indent=2)
+
         except McpToolError as e:
+            duration_ms = (time.perf_counter() - start_time) * 1000.0
+            _logger.warning_event(
+                "list_all_apis error",
+                tool_name="list_all_apis",
+                duration_ms=duration_ms,
+                error_code=e.error.code.value,
+                outcome="tool_error",
+            )
             return json.dumps(e.error.to_dict(), indent=2)
+
         except Exception as e:
+            duration_ms = (time.perf_counter() - start_time) * 1000.0
+            _logger.error_event(
+                "list_all_apis unexpected failure",
+                tool_name="list_all_apis",
+                duration_ms=duration_ms,
+                error_code="INTERNAL_ERROR",
+                outcome="internal_error",
+                details={"error": str(e)},
+            )
             return json.dumps({
                 "error": True,
                 "code": "INTERNAL_ERROR",

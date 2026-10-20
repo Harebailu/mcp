@@ -1,10 +1,10 @@
 # Configuration Reference: `pm_mcp_server`
 
-`pm_mcp_server` loads non-secret application settings from `config/config.yaml` using Pydantic v2 schemas defined in `config/config.py`. Documented environment variables can override configuration values at runtime.
+`pm_mcp_server` uses strongly typed configuration via Pydantic v2. Settings are loaded from `config/config.yaml` and can be overridden by environment variables.
 
 ---
 
-## 1. `config.yaml` Specification
+## 1. Configuration Structure
 
 ```yaml
 application:
@@ -25,31 +25,60 @@ mcp:
   transport: "streamable_http"
 
 search:
-  backend: "yaml_keyword"
+  backend: "semantic"
   max_results: 5
-  max_results_limit: 20
+  candidate_limit: 20
+  minimum_score: null
 
-rag:
-  enabled: false
+  embedding:
+    provider: "mock"              # "mock" or "remote"
+    base_url: null
+    endpoint_path: null
+    model: "REPLACE_WITH_CONFIGURED_MULTILINGUAL_MODEL"
+    api_key_env_var: "EMBEDDING_API_KEY"
+    timeout_seconds: 20
+    batch_size: 32
+    dimensions: null
+
+  reranking:
+    enabled: true
+    provider: "mock"              # "mock" or "remote"
+    base_url: null
+    endpoint_path: null
+    model: null
+    api_key_env_var: "RERANKER_API_KEY"
+    timeout_seconds: 20
+    candidate_limit: 20
+    required: true
+
   llm:
+    enabled: false
     provider: null
     base_url: null
+    endpoint_path: null
     model: null
     api_key_env_var: "LLM_API_KEY"
     timeout_seconds: 20
-  embeddings:
-    provider: null
-    base_url: null
-    model: null
-    dimensions: null
-    api_key_env_var: "EMBEDDING_API_KEY"
-    timeout_seconds: 20
-  vector_store:
-    provider: null
-    collection_name: null
-  retrieval:
-    top_k: 5
-    similarity_threshold: null
+
+  query_enrichment:
+    enabled: false
+
+cache:
+  enabled: true
+  directory: "cache/api_embeddings"
+
+startup_checks:
+  validate_catalog: true
+  check_embedding_service: true
+  check_reranker_service: true
+  check_llm_service_when_enabled: true
+  fail_on_service_unavailable: true
+  allow_catalog_only_startup: false
+
+logging:
+  level: "INFO"
+  format: "json"
+  output: "stdout"
 
 authentication:
   enabled: true
@@ -59,55 +88,40 @@ authentication:
 
 ---
 
-## 2. Setting Details
+## 2. Environment Variable Overrides
 
-### `application`
-- `name` (str): Identifier for the server instance and MCP FastMCP service name.
-- `environment` (str): Execution tier (`development`, `staging`, `production`).
-
-### `dotnet_api`
-- `base_url` (str): Downstream ASP.NET Core base URL. All outgoing requests are sent here.
-- `swagger_ui_url` (str): Location of Swagger UI. Used to dynamically discover the actual OpenAPI JSON document URL.
-- `openapi_spec_url` (str | null): Explicit override for the OpenAPI specification JSON URL. When set, bypasses Swagger UI discovery.
-- `timeout_seconds` (int, default: 30): HTTP request timeout for calls to .NET.
-- `max_response_bytes` (int, default: 1,048,576 [1MB]): Hard cap on downstream response payload to protect memory and client context.
-- `max_redirects` (int, default: 3): Maximum HTTP redirects followed.
-
-### `mcp`
-- `host` (str): IP address for the remote HTTP server (`127.0.0.1` or `0.0.0.0`).
-- `port` (int): Port for the remote HTTP MCP server (default: `8000`).
-- `transport` (str): Remote transport mechanism (`streamable_http` or `stdio`).
-
-### `search`
-- `backend` (str): Search implementation to use. Currently supports `yaml_keyword`.
-- `max_results` (int, default: 5): Default candidate count returned by `search_apis`.
-- `max_results_limit` (int, default: 20): Maximum allowable limit for client query requests.
-
-### `rag` (Future Extension - Currently Disabled)
-- `enabled` (bool, must be `false` in initial version): If set to `true`, startup validation fails because RAG is not implemented in the initial release.
-- Sub-sections `llm`, `embeddings`, `vector_store`, `retrieval`: Pre-defined configuration schema for seamless future RAG integration.
-
-### `authentication`
-- `enabled` (bool): Whether inbound JWT expiration checks are active.
-- `expiration_claim` (str, default: `"exp"`): Claim name to inspect in the JWT payload.
-- `clock_skew_seconds` (int, default: 0): Allowed time discrepancy in seconds when evaluating expiration.
+| Environment Variable | Target Configuration Key | Description |
+|---|---|---|
+| `PM_MCP_DOTNET_BASE_URL` | `dotnet_api.base_url` | Base URL of the downstream .NET API |
+| `PM_MCP_DOTNET_SWAGGER_URL` | `dotnet_api.swagger_ui_url` | Swagger UI page URL |
+| `PM_MCP_DOTNET_OPENAPI_URL` | `dotnet_api.openapi_spec_url` | Explicit OpenAPI JSON specification URL |
+| `PM_MCP_DOTNET_TIMEOUT` | `dotnet_api.timeout_seconds` | Request timeout in seconds |
+| `PM_MCP_HOST` | `mcp.host` | Host address to bind |
+| `PM_MCP_PORT` | `mcp.port` | Port number to bind |
+| `PM_MCP_TRANSPORT` | `mcp.transport` | `streamable_http`, `sse`, or `stdio` |
+| `PM_MCP_SEARCH_BACKEND` | `search.backend` | Must be `semantic` |
+| `PM_MCP_AUTH_ENABLED` | `authentication.enabled` | Inbound JWT expiration check |
+| `PM_MCP_CLOCK_SKEW` | `authentication.clock_skew_seconds` | Allowed JWT clock skew in seconds |
+| `EMBEDDING_API_KEY` | (read by provider) | Bearer token for remote embedding service |
+| `RERANKER_API_KEY` | (read by provider) | Bearer token for remote reranker service |
+| `LLM_API_KEY` | (read by provider) | Bearer token for remote LLM service |
 
 ---
 
-## 3. Environment Variable Overrides
+## 3. Operational Modes & Startup Invariants
 
-The following environment variables override settings in `config.yaml`:
-
-| Environment Variable | Config Target | Type | Description |
-|---|---|---|---|
-| `PM_MCP_DOTNET_BASE_URL` | `dotnet_api.base_url` | String | Downstream API root |
-| `PM_MCP_DOTNET_SWAGGER_URL` | `dotnet_api.swagger_ui_url` | String | Swagger UI HTML location |
-| `PM_MCP_DOTNET_OPENAPI_URL` | `dotnet_api.openapi_spec_url` | String | Explicit OpenAPI JSON location |
-| `PM_MCP_DOTNET_TIMEOUT` | `dotnet_api.timeout_seconds` | Integer | HTTP timeout |
-| `PM_MCP_HOST` | `mcp.host` | String | MCP listen host |
-| `PM_MCP_PORT` | `mcp.port` | Integer | MCP listen port |
-| `PM_MCP_TRANSPORT` | `mcp.transport` | String | Transport mode |
-| `PM_MCP_SEARCH_BACKEND` | `search.backend` | String | Search backend |
-| `PM_MCP_AUTH_ENABLED` | `authentication.enabled` | Boolean | Enable/disable expiration check |
-| `PM_MCP_CLOCK_SKEW` | `authentication.clock_skew_seconds` | Integer | Clock skew tolerance |
-
+1. **Mode A (Mock Mode)**:
+   - `search.embedding.provider: "mock"`
+   - `search.reranking.provider: "mock"`
+   - Always passes readiness checks locally.
+2. **Mode B (Strict Remote)**:
+   - `search.embedding.provider: "remote"`
+   - `startup_checks.fail_on_service_unavailable: true`
+   - `startup_checks.allow_catalog_only_startup: false`
+   - Unreachable remote model service immediately aborts startup.
+3. **Mode C (Catalog-Only Mode)**:
+   - `startup_checks.allow_catalog_only_startup: true`
+   - `startup_checks.fail_on_service_unavailable: false`
+   - Server boots with valid catalog even if external models are down.
+   - MCP `search_apis` returns `MODEL_SERVICE_UNAVAILABLE` error, while other tools remain active.
+   - **Validation Invariant**: Setting `allow_catalog_only_startup: true` with `fail_on_service_unavailable: true` is an invalid configuration state rejected by Pydantic validators.
