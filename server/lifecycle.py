@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import sys
 import time
+from pathlib import Path
 from typing import Optional
 
-from adapters.dotnet_api_client import DotNetApiClient
+from adapters.api_client import ApiClient
 from catalog.catalog_validator import validate_catalog
 from catalog.openapi_loader import OpenApiLoader
 from catalog.registry import ApiRegistry
@@ -92,12 +93,12 @@ class ApplicationLifecycle:
         openapi_operations = {}
         try:
             spec_url = await self.openapi_loader.discover_spec_url(
-                swagger_ui_url=self.config.dotnet_api.swagger_ui_url,
-                explicit_spec_url=self.config.dotnet_api.openapi_spec_url,
-                timeout=float(self.config.dotnet_api.timeout_seconds),
+                swagger_ui_url=self.config.api_client.swagger_ui_url,
+                explicit_spec_url=self.config.api_client.openapi_spec_url,
+                timeout=float(self.config.api_client.timeout_seconds),
             )
             await self.openapi_loader.load_spec(
-                timeout=float(self.config.dotnet_api.timeout_seconds),
+                timeout=float(self.config.api_client.timeout_seconds),
             )
             openapi_operations = self.openapi_loader.parse_operations()
             counts = self.openapi_loader.get_operation_count()
@@ -154,15 +155,15 @@ class ApplicationLifecycle:
             details={"domains": self.registry.get_domains()},
         )
 
-        # 7. Initialize .NET API HTTP adapter
-        self.api_client = DotNetApiClient(
-            base_url=self.config.dotnet_api.base_url,
-            timeout_seconds=self.config.dotnet_api.timeout_seconds,
-            max_response_bytes=self.config.dotnet_api.max_response_bytes,
-            max_redirects=self.config.dotnet_api.max_redirects,
+        # 7. Initialize target API HTTP adapter
+        self.api_client = ApiClient(
+            base_url=self.config.api_client.base_url,
+            timeout_seconds=self.config.api_client.timeout_seconds,
+            max_response_bytes=self.config.api_client.max_response_bytes,
+            max_redirects=self.config.api_client.max_redirects,
         )
         await self.api_client.start()
-        _logger.info_event(".NET API client initialized")
+        _logger.info_event("API client initialized")
 
         # 8. Initialize core services
         self.dependency_service = DependencyService(self.registry)
@@ -197,6 +198,7 @@ class ApplicationLifecycle:
                 base_url=emb_cfg.base_url or "",
                 model_name=emb_cfg.model,
                 endpoint_path=emb_cfg.endpoint_path,
+                api_key=emb_cfg.api_key,
                 api_key_env_var=emb_cfg.api_key_env_var,
                 timeout_seconds=emb_cfg.timeout_seconds,
                 batch_size=emb_cfg.batch_size,
@@ -218,6 +220,7 @@ class ApplicationLifecycle:
                     base_url=rerank_cfg.base_url or "",
                     model_name=rerank_cfg.model,
                     endpoint_path=rerank_cfg.endpoint_path,
+                    api_key=rerank_cfg.api_key,
                     api_key_env_var=rerank_cfg.api_key_env_var,
                     timeout_seconds=rerank_cfg.timeout_seconds,
                 )
@@ -297,9 +300,13 @@ class ApplicationLifecycle:
                 allow_catalog_only_startup=self.config.startup_checks.allow_catalog_only_startup,
             )
 
-        # 10. Instantiate FastMCP server and register 4 generic tools
+        # 10. Load complete instructions and descriptions from dedicated file
+        instructions = self._load_server_instructions()
+
+        # 11. Instantiate FastMCP server with instructions and register the 4 generic tools
         self.mcp = FastMCP(
             name=self.config.application.name,
+            instructions=instructions,
         )
 
         register_search_apis(self.mcp, self.search_service)
@@ -321,10 +328,24 @@ class ApplicationLifecycle:
 
         return self.mcp
 
+    def _load_server_instructions(self) -> str:
+        """Load complete instructions and descriptions from the configured file."""
+        instructions_file = self.config.instructions_file
+        path = Path(instructions_file)
+        if not path.is_absolute():
+            project_root = Path(__file__).resolve().parent.parent
+            path = project_root / path
+
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+
+        return f"Connected to {self.config.application.name}."
+
     async def shutdown(self) -> None:
         """Clean up all server resources."""
         _logger.info_event("Shutting down mcp_server...")
         if self.api_client:
             await self.api_client.close()
-            _logger.info_event(".NET API client closed")
+            _logger.info_event("API client closed")
         _logger.info_event("mcp_server shutdown complete")

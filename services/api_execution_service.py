@@ -8,7 +8,7 @@ Responsible for:
 - Checking required inputs, types, formats, enums.
 - Rejecting unexpected argument keys.
 - Constructing URLs from trusted base URL and catalog path.
-- Delegating HTTP execution to the .NET adapter.
+- Delegating HTTP execution to the API client adapter.
 - Returning structured results.
 
 Security:
@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from adapters.dotnet_api_client import DotNetApiClient
+from adapters.api_client import ApiClient
 from catalog.registry import ApiRegistry
 from policies.read_only import enforce_read_only_policy
 from schemas.api_contract import ResolvedOperation
@@ -36,7 +36,7 @@ class ApiExecutionService:
     def __init__(
         self,
         registry: ApiRegistry,
-        api_client: DotNetApiClient,
+        api_client: ApiClient,
     ) -> None:
         self._registry = registry
         self._api_client = api_client

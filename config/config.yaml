@@ -2,7 +2,9 @@ application:
   name: "mcp_server"
   environment: "development"
 
-dotnet_api:
+instructions_file: "config/server_instructions.md"
+
+api_client:
   base_url: "http://localhost:5273"
   swagger_ui_url: "http://localhost:5273/swagger/index.html"
   openapi_spec_url: null
@@ -31,6 +33,8 @@ search:
     dimensions: 1024
     batch_size: 32
     timeout_seconds: 60
+    base_url: null
+    endpoint_path: null
 
   reranking:
     enabled: true
@@ -39,6 +43,8 @@ search:
     required: true
     candidate_limit: 20
     timeout_seconds: 60
+    base_url: null
+    endpoint_path: null
 
   llm:
     enabled: false
@@ -46,7 +52,6 @@ search:
     base_url: null
     endpoint_path: null
     model: null
-    api_key_env_var: "LLM_API_KEY"
     timeout_seconds: 20
 
   query_enrichment:

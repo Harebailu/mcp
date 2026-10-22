@@ -23,6 +23,7 @@ class RemoteEmbeddingProvider(BaseEmbeddingProvider):
         base_url: str,
         model_name: str,
         endpoint_path: Optional[str] = None,
+        api_key: Optional[str] = None,
         api_key_env_var: str = "EMBEDDING_API_KEY",
         timeout_seconds: int = 20,
         batch_size: int = 32,
@@ -34,6 +35,7 @@ class RemoteEmbeddingProvider(BaseEmbeddingProvider):
         self._base_url = base_url.strip().rstrip("/")
         self._model_name = model_name
         self._endpoint_path = (endpoint_path or "/v1/embeddings").strip().lstrip("/")
+        self._api_key = api_key
         self._api_key_env_var = api_key_env_var
         self._timeout = float(timeout_seconds)
         self._batch_size = max(1, batch_size)
@@ -52,8 +54,8 @@ class RemoteEmbeddingProvider(BaseEmbeddingProvider):
         return self._dimensions
 
     def _get_api_key(self) -> Optional[str]:
-        """Read API token from configured environment variable."""
-        return os.environ.get(self._api_key_env_var)
+        """Read API token from explicit argument or configured environment variable."""
+        return self._api_key or os.environ.get(self._api_key_env_var)
 
     def _get_headers(self) -> dict[str, str]:
         """Prepare request headers."""

@@ -6,7 +6,7 @@ apis:
     path: /api/superusers
     display_name: Get Superusers List
     description: >
-      Retrieves the complete list of registered superusers and administrative accounts from AgriTracker.
+      Retrieves the complete list of registered superusers and administrative accounts from the system.
     use_when:
       - The agent or user needs to discover, verify, or inspect administrative accounts.
       - Listing registered superuser identities.
@@ -18,12 +18,7 @@ apis:
     input_descriptions: {}
     output_description: >
       Returns HTTP 200 OK with a list of superuser identities and their metadata.
-    dependent_apis:
-      - endpoint_name: PostApiAuthLogin
-        method: POST
-        purpose: >
-          Authenticate and obtain credentials if required for superuser endpoint access.
+    dependent_apis: []
     enabled: true
     approval_status: approved
     access_mode: read_only
-

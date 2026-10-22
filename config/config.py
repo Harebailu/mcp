@@ -1,15 +1,16 @@
 """Typed configuration management for mcp_server.
 
-Loads settings from config/config.yaml with documented environment-variable overrides.
-Validates all settings at startup, enforcing semantic search readiness,
-strict validation rules, and startup check constraints.
+Loads non-sensitive application settings from config/config.yaml.
+Environment variables are strictly reserved for tokens and sensitive credentials.
+All non-sensitive settings (URLs, ports, hosts, timeouts, transports, limits)
+are defined and managed in config/config.yaml.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -25,14 +26,15 @@ class ApplicationConfig(BaseModel):
     environment: str = "development"
 
 
-class DotNetApiConfig(BaseModel):
-    """Configuration for the downstream .NET API."""
+class ApiClientConfig(BaseModel):
+    """Configuration for the downstream API client."""
     base_url: str
     swagger_ui_url: str
     openapi_spec_url: Optional[str] = None
     timeout_seconds: int = Field(default=30, ge=1, le=300)
     max_response_bytes: int = Field(default=1_048_576, ge=1024)
     max_redirects: int = Field(default=3, ge=0, le=10)
+    api_key: Optional[str] = None
 
     @field_validator("base_url", "swagger_ui_url")
     @classmethod
@@ -62,20 +64,20 @@ class McpConfig(BaseModel):
     @field_validator("transport")
     @classmethod
     def _validate_transport(cls, v: str) -> str:
-        allowed = {"streamable_http", "streamable-http", "sse", "stdio"}
+        allowed = {"streamable_http", "stdio"}
         if v not in allowed:
-            raise ValueError(f"transport must be one of {allowed}, got: {v}")
+            raise ValueError(f"transport must be one of {allowed}, got: '{v}'")
         return v
 
 
 class OllamaConfig(BaseModel):
-    """Configuration for local Ollama service."""
+    """Ollama local service connection configuration."""
     base_url: str = "http://localhost:11434"
-    timeout_seconds: int = Field(default=60, ge=1, le=600)
+    timeout_seconds: int = Field(default=60, ge=1, le=300)
 
     @field_validator("base_url")
     @classmethod
-    def _validate_url(cls, v: str) -> str:
+    def _validate_base_url(cls, v: str) -> str:
         v = v.strip().rstrip("/")
         if not v.startswith(("http://", "https://")):
             raise ValueError(f"Ollama base_url must start with http:// or https://, got: {v}")
@@ -88,7 +90,7 @@ class EmbeddingConfig(BaseModel):
     base_url: Optional[str] = None
     endpoint_path: Optional[str] = None
     model: str = "bge-m3:latest"
-    api_key_env_var: str = "EMBEDDING_API_KEY"
+    api_key: Optional[str] = None
     timeout_seconds: int = Field(default=60, ge=1, le=300)
     batch_size: int = Field(default=32, ge=1, le=256)
     dimensions: Optional[int] = Field(default=1024, ge=1)
@@ -109,7 +111,7 @@ class RerankingConfig(BaseModel):
     base_url: Optional[str] = None
     endpoint_path: Optional[str] = None
     model: str = "qwen:1.8b"
-    api_key_env_var: str = "RERANKER_API_KEY"
+    api_key: Optional[str] = None
     timeout_seconds: int = Field(default=60, ge=1, le=300)
     candidate_limit: int = Field(default=20, ge=1, le=100)
     required: bool = True
@@ -130,13 +132,12 @@ class LlmSearchConfig(BaseModel):
     base_url: Optional[str] = None
     endpoint_path: Optional[str] = None
     model: Optional[str] = None
-    api_key_env_var: str = "LLM_API_KEY"
+    api_key: Optional[str] = None
     timeout_seconds: int = Field(default=20, ge=1, le=120)
 
     @model_validator(mode="after")
     def _check_llm_state(self) -> "LlmSearchConfig":
         if self.enabled:
-            # Future LLM features remain disabled in initial deployment
             raise ValueError(
                 "LLM query assistance is not enabled in this deployment. "
                 "Keep search.llm.enabled set to false."
@@ -166,7 +167,7 @@ class SearchConfig(BaseModel):
     def _validate_backend(cls, v: str) -> str:
         if v != "semantic":
             raise ValueError(
-                f"Keyword search has been removed. Search backend must be 'semantic', got: '{v}'"
+                f"Search backend must be 'semantic', got: '{v}'"
             )
         return v
 
@@ -188,11 +189,9 @@ class StartupChecksConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_startup_mode_consistency(self) -> "StartupChecksConfig":
-        # Mandatory catalog validation must NEVER be disabled
         if not self.validate_catalog:
             raise ValueError("Catalog validation is mandatory and cannot be disabled.")
 
-        # Reject contradictory mode configuration
         if self.allow_catalog_only_startup and self.fail_on_service_unavailable:
             raise ValueError(
                 "Contradictory configuration: when allow_catalog_only_startup is true, "
@@ -220,7 +219,7 @@ class LoggingConfig(BaseModel):
     @classmethod
     def _validate_format(cls, v: str) -> str:
         if v.lower() != "json":
-            raise ValueError(f"logging format must be 'json', got: '{v}'")
+            raise ValueError(f"Logging format must be 'json', got: '{v}'")
         return "json"
 
 
@@ -238,7 +237,7 @@ class AuthenticationConfig(BaseModel):
 class AppConfig(BaseModel):
     """Root configuration for mcp_server."""
     application: ApplicationConfig = Field(default_factory=ApplicationConfig)
-    dotnet_api: DotNetApiConfig
+    api_client: ApiClientConfig
     mcp: McpConfig = Field(default_factory=McpConfig)
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
@@ -246,6 +245,7 @@ class AppConfig(BaseModel):
     startup_checks: StartupChecksConfig = Field(default_factory=StartupChecksConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     authentication: AuthenticationConfig = Field(default_factory=AuthenticationConfig)
+    instructions_file: str = "config/server_instructions.md"
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +267,11 @@ def _get_config_path() -> Path:
 # ---------------------------------------------------------------------------
 
 def load_config(config_path: Optional[str | Path] = None) -> AppConfig:
-    """Load and validate application configuration with environment overrides."""
+    """Load and validate application configuration.
+
+    Reads all structural and operational configuration from config/config.yaml.
+    Applies sensitive token/credential overrides from environment variables.
+    """
     path = Path(config_path) if config_path else _get_config_path()
 
     if not path.exists():
@@ -282,77 +286,33 @@ def load_config(config_path: Optional[str | Path] = None) -> AppConfig:
     if not isinstance(raw, dict):
         raise ValueError(f"Configuration file must be a YAML mapping, got: {type(raw).__name__}")
 
-    # Apply environment overrides
+    # Apply sensitive token/credential overrides from environment variables only
     _apply_env_overrides(raw)
 
     return AppConfig.model_validate(raw)
 
 
 def _apply_env_overrides(raw: dict) -> None:
-    """Apply documented environment-variable overrides to raw config dict."""
-    env_map = [
-        # MCP_ prefixes (standard)
-        ("MCP_OLLAMA_BASE_URL", ["ollama", "base_url"]),
-        ("MCP_OLLAMA_TIMEOUT", ["ollama", "timeout_seconds"]),
-        ("MCP_DOTNET_BASE_URL", ["dotnet_api", "base_url"]),
-        ("MCP_DOTNET_SWAGGER_URL", ["dotnet_api", "swagger_ui_url"]),
-        ("MCP_DOTNET_OPENAPI_URL", ["dotnet_api", "openapi_spec_url"]),
-        ("MCP_DOTNET_TIMEOUT", ["dotnet_api", "timeout_seconds"]),
-        ("MCP_HOST", ["mcp", "host"]),
-        ("MCP_PORT", ["mcp", "port"]),
-        ("MCP_TRANSPORT", ["mcp", "transport"]),
-        ("MCP_SEARCH_BACKEND", ["search", "backend"]),
-        ("MCP_EMBEDDING_PROVIDER", ["search", "embedding", "provider"]),
-        ("MCP_EMBEDDING_BASE_URL", ["search", "embedding", "base_url"]),
-        ("MCP_EMBEDDING_MODEL", ["search", "embedding", "model"]),
-        ("MCP_RERANKER_PROVIDER", ["search", "reranking", "provider"]),
-        ("MCP_RERANKER_BASE_URL", ["search", "reranking", "base_url"]),
-        ("MCP_RERANKER_MODEL", ["search", "reranking", "model"]),
-        ("MCP_ALLOW_CATALOG_ONLY", ["startup_checks", "allow_catalog_only_startup"]),
-        ("MCP_FAIL_ON_UNAVAILABLE", ["startup_checks", "fail_on_service_unavailable"]),
-        ("MCP_LOG_LEVEL", ["logging", "level"]),
-        ("MCP_AUTH_ENABLED", ["authentication", "enabled"]),
-        ("MCP_CLOCK_SKEW", ["authentication", "clock_skew_seconds"]),
-        # Legacy PM_MCP_ compatibility
-        ("PM_MCP_DOTNET_BASE_URL", ["dotnet_api", "base_url"]),
-        ("PM_MCP_DOTNET_SWAGGER_URL", ["dotnet_api", "swagger_ui_url"]),
-        ("PM_MCP_DOTNET_OPENAPI_URL", ["dotnet_api", "openapi_spec_url"]),
-        ("PM_MCP_DOTNET_TIMEOUT", ["dotnet_api", "timeout_seconds"]),
-        ("PM_MCP_HOST", ["mcp", "host"]),
-        ("PM_MCP_PORT", ["mcp", "port"]),
-        ("PM_MCP_TRANSPORT", ["mcp", "transport"]),
-        ("PM_MCP_SEARCH_BACKEND", ["search", "backend"]),
-        ("PM_MCP_EMBEDDING_PROVIDER", ["search", "embedding", "provider"]),
-        ("PM_MCP_EMBEDDING_BASE_URL", ["search", "embedding", "base_url"]),
-        ("PM_MCP_EMBEDDING_MODEL", ["search", "embedding", "model"]),
-        ("PM_MCP_RERANKER_PROVIDER", ["search", "reranking", "provider"]),
-        ("PM_MCP_RERANKER_BASE_URL", ["search", "reranking", "base_url"]),
-        ("PM_MCP_RERANKER_MODEL", ["search", "reranking", "model"]),
-        ("PM_MCP_ALLOW_CATALOG_ONLY", ["startup_checks", "allow_catalog_only_startup"]),
-        ("PM_MCP_FAIL_ON_UNAVAILABLE", ["startup_checks", "fail_on_service_unavailable"]),
-        ("PM_MCP_LOG_LEVEL", ["logging", "level"]),
-        ("PM_MCP_AUTH_ENABLED", ["authentication", "enabled"]),
-        ("PM_MCP_CLOCK_SKEW", ["authentication", "clock_skew_seconds"]),
+    """Apply sensitive token and credential overrides from environment variables.
+
+    Strict rule: All non-sensitive configuration values reside strictly in config.yaml.
+    Only authentication tokens, API keys, and sensitive secrets may be provided via environment variables.
+    """
+    sensitive_env_map = [
+        ("EMBEDDING_API_KEY", ["search", "embedding", "api_key"]),
+        ("MCP_EMBEDDING_API_KEY", ["search", "embedding", "api_key"]),
+        ("RERANKER_API_KEY", ["search", "reranking", "api_key"]),
+        ("MCP_RERANKER_API_KEY", ["search", "reranking", "api_key"]),
+        ("API_BEARER_TOKEN", ["api_client", "api_key"]),
+        ("MCP_API_KEY", ["api_client", "api_key"]),
     ]
 
-    for env_var, keys in env_map:
+    for env_var, keys in sensitive_env_map:
         value = os.environ.get(env_var)
-        if value is not None:
+        if value is not None and value.strip():
             target = raw
             for key in keys[:-1]:
                 if key not in target:
                     target[key] = {}
                 target = target[key]
-
-            final_key = keys[-1]
-            if final_key in ("timeout_seconds", "port", "clock_skew_seconds", "dimensions", "batch_size", "candidate_limit", "max_results"):
-                try:
-                    value = int(value)
-                except ValueError:
-                    raise ValueError(
-                        f"Environment variable {env_var} must be an integer, got: {value}"
-                    )
-            elif final_key in ("enabled", "allow_catalog_only_startup", "fail_on_service_unavailable", "required", "validate_catalog"):
-                value = value.lower() in ("true", "1", "yes")
-
-            target[final_key] = value
+            target[keys[-1]] = value.strip()

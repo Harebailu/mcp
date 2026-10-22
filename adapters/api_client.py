@@ -1,8 +1,8 @@
-"""Reusable asynchronous HTTP client for the downstream .NET API.
+"""Reusable asynchronous HTTP client for the downstream API.
 
 Responsibilities:
 - Managed HTTP client lifecycle (reuse, not per-request creation).
-- Configured .NET API base URL from trusted configuration.
+- Configured API base URL from trusted configuration.
 - Safe URL and query construction from trusted catalog paths.
 - HTTP request execution with timeout enforcement.
 - Response-size limits.
@@ -13,14 +13,13 @@ Responsibilities:
 Security:
 - The base URL comes from configuration, not from the agent.
 - Endpoint paths come from the validated YAML catalog, not from agent input.
-- The inbound MCP JWT is never forwarded to the .NET API.
+- Inbound MCP JWT credentials are never forwarded to the downstream API.
 - Only server-controlled, explicitly permitted headers are sent.
 """
 
 from __future__ import annotations
 
 import json
-import re
 from typing import Any, Optional
 from urllib.parse import quote, urlencode
 
@@ -29,8 +28,8 @@ import httpx
 from schemas.errors import ErrorCode, McpToolError
 
 
-class DotNetApiClient:
-    """Asynchronous HTTP client for calling the .NET API."""
+class ApiClient:
+    """Asynchronous HTTP client for calling the downstream API."""
 
     def __init__(
         self,
@@ -102,6 +101,7 @@ class DotNetApiClient:
                     resolved_path = resolved_path.replace(placeholder, encoded_value)
 
         # Check for unresolved placeholders
+        import re
         remaining = re.findall(r"\{([^}]+)\}", resolved_path)
         if remaining:
             raise McpToolError.from_code(
@@ -127,7 +127,7 @@ class DotNetApiClient:
         if not filtered:
             return None
 
-        # Convert booleans to lowercase strings for .NET compatibility
+        # Convert booleans to lowercase strings for API compatibility
         encoded_params = {}
         for k, v in filtered.items():
             if isinstance(v, bool):
@@ -148,7 +148,7 @@ class DotNetApiClient:
         body: Optional[dict[str, Any]] = None,
         additional_headers: Optional[dict[str, str]] = None,
     ) -> ApiResponse:
-        """Execute an HTTP request to the .NET API.
+        """Execute an HTTP request to the downstream API.
 
         Args:
             method: HTTP method (GET, POST, etc.).
@@ -204,7 +204,7 @@ class DotNetApiClient:
         except httpx.ConnectError as e:
             raise McpToolError.from_code(
                 ErrorCode.DOWNSTREAM_FAILURE,
-                f"Cannot connect to the .NET API for {method} {path}: {e}",
+                f"Cannot connect to the downstream API for {method} {path}: {e}",
             ) from e
         except Exception as e:
             raise McpToolError.from_code(
@@ -216,7 +216,7 @@ class DotNetApiClient:
 
     async def _process_response(
         self, response: httpx.Response, method: str, path: str
-    ) -> "ApiResponse":
+    ) -> ApiResponse:
         """Process the HTTP response with size limits and status handling."""
         status_code = response.status_code
         content_length = response.headers.get("content-length")
@@ -277,7 +277,6 @@ class DotNetApiClient:
         self, status_code: int, data: Any, method: str, path: str
     ) -> str:
         """Classify an HTTP error status into a safe message."""
-        # Extract error message from response if available
         detail = ""
         if isinstance(data, dict):
             detail = data.get("message", data.get("title", data.get("error", "")))
@@ -321,20 +320,6 @@ class ApiResponse:
         self.truncated = truncated
         self.empty_response = empty_response
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to a dictionary for MCP tool results."""
-        result: dict[str, Any] = {
-            "status_code": self.status_code,
-            "success": self.success,
-        }
-        if self.data is not None:
-            result["data"] = self.data
-        if self.headers:
-            result["headers"] = self.headers
-        if self.error:
-            result["error"] = self.error
-        if self.truncated:
-            result["truncated"] = True
-        if self.empty_response:
-            result["empty_response"] = True
-        return result
+
+
+
