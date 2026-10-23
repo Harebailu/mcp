@@ -7,6 +7,7 @@ Handles initialization and shutdown of all server components:
 - Domain-based YAML catalog loading and integrity validation
 - Runtime registry population
 - Multilingual semantic search, embedding cache, and candidate reranking setup via local Ollama
+- Optional bilingual query enrichment setup (English / Korean)
 - Downstream HTTP client lifecycle
 - MCP tool registration
 """
@@ -28,6 +29,9 @@ from observability.json_logging import get_logger, setup_json_logging
 from schemas.errors import ErrorCode, McpToolError
 from search.embeddings.ollama_provider import OllamaEmbeddingProvider
 from search.embeddings.remote_provider import RemoteEmbeddingProvider
+from search.enrichment.ollama_provider import OllamaQueryEnrichmentProvider
+from search.enrichment.remote_provider import RemoteApiQueryEnrichmentProvider
+from search.enrichment.service import QueryEnrichmentService
 from search.reranking.ollama_provider import OllamaRerankerProvider
 from search.reranking.remote_provider import RemoteRerankerProvider
 from search.retrieval.embedding_cache import EmbeddingCache
@@ -58,6 +62,7 @@ class ApplicationLifecycle:
         # Search components
         self.embedding_cache: Optional[EmbeddingCache] = None
         self.vector_index: Optional[VectorIndex] = None
+        self.query_enrichment_service: Optional[QueryEnrichmentService] = None
         self.search_service: Optional[SemanticSearchService] = None
 
         # Core services
@@ -73,24 +78,23 @@ class ApplicationLifecycle:
         self.config = load_config(config_path)
 
         # 2. Setup structured JSON logging
-        setup_json_logging(self.config.logging.level)
+        setup_json_logging(
+            level=self.config.logging.level,
+            output=self.config.logging.output,
+        )
         _logger.info_event(
-            "Configuration loaded and structured logging initialized",
+            "Application initialization started",
             details={
-                "application": self.config.application.name,
                 "environment": self.config.application.environment,
                 "transport": self.config.mcp.transport,
-                "search_backend": self.config.search.backend,
-                "embedding_provider": self.config.search.embedding.provider,
-                "embedding_model": self.config.search.embedding.model,
-                "reranking_enabled": self.config.search.reranking.enabled,
-                "reranker_model": self.config.search.reranking.model,
+                "host": self.config.mcp.host,
+                "port": self.config.mcp.port,
             },
         )
 
-        # 3. Initialize OpenAPI loader and attempt specification retrieval
+        # 3. Discover and load OpenAPI specification
         self.openapi_loader = OpenApiLoader()
-        openapi_operations = {}
+        openapi_operations = None
         try:
             spec_url = await self.openapi_loader.discover_spec_url(
                 swagger_ui_url=self.config.api_client.swagger_ui_url,
@@ -225,6 +229,63 @@ class ApplicationLifecycle:
                     timeout_seconds=rerank_cfg.timeout_seconds,
                 )
 
+        # Instantiate query enrichment service (when enabled)
+        enrich_cfg = self.config.search.query_enrichment
+        if enrich_cfg.enabled:
+            if enrich_cfg.provider == "ollama":
+                enrich_base_url = enrich_cfg.ollama.base_url or self.config.ollama.base_url
+                enrichment_provider = OllamaQueryEnrichmentProvider(
+                    base_url=enrich_base_url,
+                    model_name=enrich_cfg.model or "qwen:1.8b",
+                    endpoint_path=enrich_cfg.ollama.endpoint_path,
+                    timeout_seconds=enrich_cfg.timeout_seconds,
+                )
+            else:
+                enrichment_provider = RemoteApiQueryEnrichmentProvider(
+                    base_url=enrich_cfg.remote_api.base_url or "",
+                    model_name=enrich_cfg.remote_api.model or enrich_cfg.model,
+                    endpoint_path=enrich_cfg.remote_api.endpoint_path,
+                    api_key=enrich_cfg.remote_api.api_key,
+                    api_key_env_var=enrich_cfg.remote_api.api_key_env_var,
+                    timeout_seconds=enrich_cfg.remote_api.timeout_seconds,
+                )
+
+            # Check query enrichment model readiness
+            if self.config.startup_checks.check_enrichment_model:
+                enrich_ready = await enrichment_provider.check_readiness()
+                if not enrich_ready:
+                    _logger.warning_event(
+                        "Query enrichment readiness probe failed",
+                        details={
+                            "provider": enrichment_provider.provider_name,
+                            "model": enrichment_provider.model_name,
+                        },
+                    )
+                    if self.config.startup_checks.fail_on_service_unavailable and not enrich_cfg.fail_open:
+                        raise McpToolError.from_code(
+                            ErrorCode.MODEL_SERVICE_UNAVAILABLE,
+                            f"Query enrichment model '{enrichment_provider.model_name}' is not reachable.",
+                        )
+
+            self.query_enrichment_service = QueryEnrichmentService(
+                provider=enrichment_provider,
+                enabled=True,
+                fail_open=enrich_cfg.fail_open,
+                max_query_length=enrich_cfg.max_query_length,
+                max_alternative_queries=enrich_cfg.max_alternative_queries,
+            )
+            _logger.info_event(
+                "Bilingual query enrichment service active",
+                details={
+                    "provider": enrichment_provider.provider_name,
+                    "model": enrichment_provider.model_name,
+                    "fail_open": enrich_cfg.fail_open,
+                    "max_alternatives": enrich_cfg.max_alternative_queries,
+                },
+            )
+        else:
+            self.query_enrichment_service = QueryEnrichmentService(enabled=False)
+
         # Startup readiness checks for model services
         model_services_healthy = True
         service_unavail_reason = None
@@ -281,6 +342,7 @@ class ApplicationLifecycle:
             reranker_provider=reranker_provider,
             vector_index=self.vector_index,
             embedding_cache=self.embedding_cache,
+            query_enrichment_service=self.query_enrichment_service,
             default_limit=self.config.search.max_results,
             candidate_limit=self.config.search.candidate_limit,
             minimum_score=self.config.search.minimum_score,
@@ -323,29 +385,43 @@ class ApplicationLifecycle:
                 "tools_registered": ["search_apis", "get_api_schema", "execute_api", "list_all_apis"],
                 "semantic_search_ready": self.search_service.is_ready,
                 "search_mode": self.search_service.search_mode,
+                "query_enrichment_enabled": self.config.search.query_enrichment.enabled,
             },
         )
 
         return self.mcp
 
     def _load_server_instructions(self) -> str:
-        """Load complete instructions and descriptions from the configured file."""
-        instructions_file = self.config.instructions_file
-        path = Path(instructions_file)
-        if not path.is_absolute():
-            project_root = Path(__file__).resolve().parent.parent
-            path = project_root / path
+        """Load complete instructions and descriptions from the configured markdown file."""
+        instructions_file = self.config.instructions_file if self.config else "config/server_instructions.md"
+        instructions_path = Path(instructions_file)
+        if not instructions_path.is_absolute():
+            instructions_path = Path(__file__).resolve().parent.parent / instructions_file
 
-        if path.exists():
-            with open(path, "r", encoding="utf-8") as f:
-                return f.read().strip()
+        if instructions_path.exists():
+            try:
+                with open(instructions_path, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                _logger.info_event(
+                    "Server instructions loaded successfully",
+                    details={"path": str(instructions_path), "length": len(content)},
+                )
+                return content
+            except Exception as e:
+                _logger.warning_event(
+                    "Failed to read instructions file; using default instructions",
+                    details={"error": str(e), "path": str(instructions_path)},
+                )
 
-        return f"Connected to {self.config.application.name}."
+        return (
+            "Generic metadata-driven MCP server providing API discovery, schema resolution, "
+            "and secure execution for downstream business APIs."
+        )
 
     async def shutdown(self) -> None:
-        """Clean up all server resources."""
-        _logger.info_event("Shutting down mcp_server...")
+        """Gracefully release all resources."""
+        _logger.info_event("Application shutdown initiated")
         if self.api_client:
             await self.api_client.close()
             _logger.info_event("API client closed")
-        _logger.info_event("mcp_server shutdown complete")
+        _logger.info_event("Application shutdown complete")

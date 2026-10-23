@@ -145,9 +145,74 @@ class LlmSearchConfig(BaseModel):
         return self
 
 
+class QueryEnrichmentOllamaConfig(BaseModel):
+    """Ollama local model configuration for query enrichment."""
+    base_url: Optional[str] = None
+    endpoint_path: str = "/api/chat"
+
+    @field_validator("base_url")
+    @classmethod
+    def _validate_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        v = v.strip().rstrip("/")
+        if not v.startswith(("http://", "https://")):
+            raise ValueError(f"Ollama base_url must start with http:// or https://, got: {v}")
+        return v
+
+
+class QueryEnrichmentRemoteConfig(BaseModel):
+    """Remote API configuration for query enrichment in production."""
+    base_url: Optional[str] = None
+    endpoint_path: Optional[str] = "/v1/chat/completions"
+    api_key_env_var: str = "QUERY_ENRICHMENT_API_KEY"
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+    timeout_seconds: int = Field(default=30, ge=1, le=300)
+
+    @field_validator("base_url")
+    @classmethod
+    def _validate_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        v = v.strip().rstrip("/")
+        if not v.startswith(("http://", "https://")):
+            raise ValueError(f"Remote API base_url must start with http:// or https://, got: {v}")
+        return v
+
+
 class QueryEnrichmentConfig(BaseModel):
-    """Query enrichment flag."""
+    """Bilingual query enrichment configuration."""
     enabled: bool = False
+    provider: str = "ollama"  # "ollama" or "remote_api"
+    model: str = "qwen:1.8b"
+    timeout_seconds: int = Field(default=30, ge=1, le=300)
+    max_query_length: int = Field(default=2000, ge=10, le=10000)
+    max_alternative_queries: int = Field(default=2, ge=0, le=10)
+    fail_open: bool = True
+    prompt_template: str = "query_enrichment"
+
+    ollama: QueryEnrichmentOllamaConfig = Field(default_factory=QueryEnrichmentOllamaConfig)
+    remote_api: QueryEnrichmentRemoteConfig = Field(default_factory=QueryEnrichmentRemoteConfig)
+
+    @field_validator("provider")
+    @classmethod
+    def _validate_provider(cls, v: str) -> str:
+        v_clean = v.strip().lower()
+        allowed = {"ollama", "remote_api", "remote"}
+        if v_clean not in allowed:
+            raise ValueError(f"query_enrichment provider must be one of {allowed}, got: '{v}'")
+        return v_clean
+
+    @model_validator(mode="after")
+    def _validate_provider_settings(self) -> "QueryEnrichmentConfig":
+        if self.enabled:
+            if self.provider in ("remote_api", "remote"):
+                if not self.remote_api.base_url:
+                    raise ValueError(
+                        "search.query_enrichment.remote_api.base_url is required when query_enrichment is enabled with remote_api provider"
+                    )
+        return self
 
 
 class SearchConfig(BaseModel):
@@ -184,6 +249,7 @@ class StartupChecksConfig(BaseModel):
     check_ollama_service: bool = True
     check_embedding_model: bool = True
     check_reranking_model: bool = True
+    check_enrichment_model: bool = True
     fail_on_service_unavailable: bool = True
     allow_catalog_only_startup: bool = False
 
@@ -305,6 +371,8 @@ def _apply_env_overrides(raw: dict) -> None:
         ("MCP_RERANKER_API_KEY", ["search", "reranking", "api_key"]),
         ("API_BEARER_TOKEN", ["api_client", "api_key"]),
         ("MCP_API_KEY", ["api_client", "api_key"]),
+        ("QUERY_ENRICHMENT_API_KEY", ["search", "query_enrichment", "remote_api", "api_key"]),
+        ("MCP_QUERY_ENRICHMENT_API_KEY", ["search", "query_enrichment", "remote_api", "api_key"]),
     ]
 
     for env_var, keys in sensitive_env_map:

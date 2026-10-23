@@ -106,15 +106,22 @@ Included fields:
 **Cache Invalidation Boundary**:
 Operational flags (`enabled`, `approval_status`, `access_mode`) are **strictly excluded** from document text and fingerprints. Toggling an endpoint's status takes effect immediately at runtime in the registry and vector index without invalidating the vector cache.
 
-### 4.2 Two-Stage Retrieval Pipeline
-1. **Stage 1: Dense Vector Retrieval with `bge-m3:latest`**:
-   - Query is embedded into 1024-dimensional dense vector space via Ollama.
-   - VectorIndex computes unit-normalized cosine similarity against candidate vectors.
+### 4.2 Multistage Retrieval Pipeline
+1. **Optional Stage 0: Bilingual Query Enrichment (when enabled)**:
+   - Evaluates user search query in English, Korean, or mixed languages.
+   - Refines business intent and preserves exact technical identifiers, IDs, and constraints.
+   - For Korean queries: generates a refined Korean query and a concise English semantic equivalent to enable cross-lingual matching against English API catalog descriptions.
+   - Strictly validates structured JSON output into `QueryEnrichmentResult`.
+   - Supports fail-open behavior: falls back to original query if enrichment fails.
+2. **Stage 1: Dense Vector Retrieval with `bge-m3:latest` & Rank Fusion**:
+   - Embeds original query and any validated query variants into 1024-dimensional dense vector space.
+   - VectorIndex computes unit-normalized cosine similarity against catalog candidate vectors.
+   - Multi-query results are aggregated using Reciprocal Rank Fusion (RRF, $k=60$) with Max-Similarity Preservation, rewarding candidates appearing across multiple query formulations.
    - In-memory runtime eligibility filter filters out unapproved, disabled, non-read-only, or non-GET endpoints.
    - Top candidates up to `candidate_limit` (default 20) are retrieved.
-2. **Stage 2: Contextual Reranking with `qwen:1.8b`**:
-   - Retrieved candidates are sent with the search query to local Ollama `qwen:1.8b` using `search/prompts/rerank_template.txt`.
-   - The model produces a structured JSON ranking.
+3. **Stage 2: Contextual Reranking with `qwen:1.8b`**:
+   - Retrieved candidates are sent with the **original user query** to local Ollama `qwen:1.8b` using `search/prompts/rerank_template.txt`.
+   - The model produces a structured JSON ranking evaluating candidate relevance against the user's authentic intent.
    - Returned items are strictly validated against the original candidate set: no new APIs can be invented, and endpoint names / methods cannot be altered.
    - Returned candidates include `relevance_score`, `semantic_score`, and `rerank_score`.
 

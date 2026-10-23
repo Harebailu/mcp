@@ -56,6 +56,22 @@ search:
 
   query_enrichment:
     enabled: false
+    provider: "ollama"            # "ollama" or "remote_api"
+    model: "qwen:1.8b"
+    timeout_seconds: 30
+    max_query_length: 2000
+    max_alternative_queries: 2
+    fail_open: true
+    prompt_template: "query_enrichment"
+    ollama:
+      base_url: null              # Fallback to root ollama.base_url if null
+      endpoint_path: "/api/chat"
+    remote_api:
+      base_url: null
+      endpoint_path: "/v1/chat/completions"
+      api_key_env_var: "QUERY_ENRICHMENT_API_KEY"
+      model: null
+      timeout_seconds: 30
 
 cache:
   enabled: true

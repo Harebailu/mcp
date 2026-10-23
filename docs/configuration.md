@@ -65,6 +65,22 @@ search:
 
   query_enrichment:
     enabled: false
+    provider: "ollama"            # "ollama" or "remote_api"
+    model: "qwen:1.8b"
+    timeout_seconds: 30
+    max_query_length: 2000
+    max_alternative_queries: 2
+    fail_open: true
+    prompt_template: "query_enrichment"
+    ollama:
+      base_url: null              # Fallback to root ollama.base_url if null
+      endpoint_path: "/api/chat"
+    remote_api:
+      base_url: null
+      endpoint_path: "/v1/chat/completions"
+      api_key_env_var: "QUERY_ENRICHMENT_API_KEY"
+      model: null
+      timeout_seconds: 30
 
 cache:
   enabled: true
@@ -101,6 +117,7 @@ In accordance with strict security architecture, **environment variables (`.env`
 |---|---|---|
 | `EMBEDDING_API_KEY` (or `MCP_EMBEDDING_API_KEY`) | `search.embedding.api_key` | Secret API key for remote embedding provider (production) |
 | `RERANKER_API_KEY` (or `MCP_RERANKER_API_KEY`) | `search.reranking.api_key` | Secret API key for remote reranker provider (production) |
+| `QUERY_ENRICHMENT_API_KEY` (or `MCP_QUERY_ENRICHMENT_API_KEY`) | `search.query_enrichment.remote_api.api_key` | Secret API key for remote query enrichment provider (production) |
 | `API_BEARER_TOKEN` (or `MCP_API_KEY`) | `api_client.api_key` | Authorization token for downstream API communication |
 
 > **No Backward Compatibility Layer**:

@@ -67,3 +67,39 @@ class RerankerProvider(Protocol):
     async def check_readiness(self) -> bool:
         """Probe the reranking service to verify availability."""
         ...
+
+
+@runtime_checkable
+class QueryEnrichmentProvider(Protocol):
+    """Protocol for bilingual query enrichment providers."""
+
+    @property
+    def provider_name(self) -> str:
+        """Name of the query enrichment provider (e.g. 'ollama', 'remote_api')."""
+        ...
+
+    @property
+    def model_name(self) -> str | None:
+        """Configured model identifier for query enrichment."""
+        ...
+
+    async def enrich(
+        self,
+        query: str,
+        max_alternatives: int = 2,
+    ) -> Any:
+        """Refine and enrich a user search query.
+
+        Args:
+            query: User's original search query.
+            max_alternatives: Maximum number of alternative queries to return.
+
+        Returns:
+            QueryEnrichmentResult containing original query, language,
+            enriched query, and optional alternative queries.
+        """
+        ...
+
+    async def check_readiness(self) -> bool:
+        """Probe the model service to verify availability."""
+        ...

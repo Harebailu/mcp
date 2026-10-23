@@ -82,8 +82,8 @@ class JsonLogFormatter(logging.Formatter):
         return json.dumps(log_data, default=str)
 
 
-def setup_json_logging(level: str = "INFO") -> logging.Logger:
-    """Configure the root logger with the JsonLogFormatter outputting to stdout."""
+def setup_json_logging(level: str = "INFO", output: str = "stdout") -> logging.Logger:
+    """Configure the root logger with the JsonLogFormatter outputting to stdout or stderr."""
     numeric_level = getattr(logging, level.upper(), logging.INFO)
 
     root = logging.getLogger("mcp_server")
@@ -92,7 +92,8 @@ def setup_json_logging(level: str = "INFO") -> logging.Logger:
     # Avoid duplicate handlers on re-initialization
     root.handlers.clear()
 
-    handler = logging.StreamHandler(sys.stdout)
+    stream = sys.stderr if str(output).lower() == "stderr" else sys.stdout
+    handler = logging.StreamHandler(stream)
     handler.setLevel(numeric_level)
     handler.setFormatter(JsonLogFormatter())
     root.addHandler(handler)

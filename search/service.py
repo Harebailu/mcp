@@ -1,8 +1,9 @@
 """Multistage semantic search and candidate reranking service.
 
 Replaces keyword search with:
-- Stage 1: Vector cosine similarity retrieval over multilingual embeddings.
-- Stage 2: Contextual candidate reranking over retrieved candidates.
+- Optional Stage 0: Bilingual query enrichment (refining user query and generating cross-lingual equivalents).
+- Stage 1: Vector cosine similarity retrieval over multilingual embeddings (with rank fusion for multi-query variants).
+- Stage 2: Contextual candidate reranking over retrieved candidates against the original user query.
 
 Enforces runtime operational eligibility filtering: only enabled, approved,
 read_only GET endpoints are returned in candidate sets.
@@ -17,8 +18,10 @@ from catalog.registry import ApiRegistry
 from observability.json_logging import get_logger
 from schemas.catalog import CatalogEntry
 from schemas.errors import ErrorCode, McpToolError
+from schemas.query_enrichment import QueryEnrichmentResult
 from schemas.tool_results import SearchApisResult, SearchResultEntry
 from search.document_builder import SearchDocumentBuilder
+from search.enrichment.service import QueryEnrichmentService
 from search.protocols import EmbeddingProvider, RerankerProvider
 from search.retrieval.embedding_cache import EmbeddingCache
 from search.retrieval.vector_index import VectorIndex
@@ -27,7 +30,7 @@ _logger = get_logger("SemanticSearchService")
 
 
 class SemanticSearchService:
-    """Orchestrates embedding generation, vector retrieval, and candidate reranking."""
+    """Orchestrates query enrichment, embedding generation, vector retrieval, and candidate reranking."""
 
     def __init__(
         self,
@@ -36,6 +39,7 @@ class SemanticSearchService:
         reranker_provider: Optional[RerankerProvider],
         vector_index: VectorIndex,
         embedding_cache: EmbeddingCache,
+        query_enrichment_service: Optional[QueryEnrichmentService] = None,
         default_limit: int = 5,
         candidate_limit: int = 20,
         minimum_score: Optional[float] = None,
@@ -47,6 +51,7 @@ class SemanticSearchService:
         self._reranker_provider = reranker_provider
         self._vector_index = vector_index
         self._embedding_cache = embedding_cache
+        self._query_enrichment_service = query_enrichment_service
         self._default_limit = default_limit
         self._candidate_limit = candidate_limit
         self._minimum_score = minimum_score
@@ -66,6 +71,11 @@ class SemanticSearchService:
     def search_mode(self) -> str:
         """Active search provider mode ('ollama' or 'remote')."""
         return self._embedding_provider.provider_name
+
+    @property
+    def query_enrichment_service(self) -> Optional[QueryEnrichmentService]:
+        """Configured query enrichment service instance."""
+        return self._query_enrichment_service
 
     async def initialize_vectors(
         self,
@@ -196,7 +206,8 @@ class SemanticSearchService:
                 f"{err_msg} Please use list_all_apis as fallback.",
             )
 
-        if not query or not query.strip():
+        clean_query = (query or "").strip()
+        if not clean_query:
             return SearchApisResult(
                 query=query,
                 total_matches=0,
@@ -206,29 +217,87 @@ class SemanticSearchService:
                 message="Search query is empty. Provide a natural language description.",
             )
 
-        # 1. Embed query
-        try:
-            query_vector = await self._embedding_provider.embed_query(query.strip())
-        except Exception as e:
-            _logger.error_event("Query embedding failed", details={"error": str(e)})
-            raise McpToolError.from_code(
-                ErrorCode.EMBEDDING_SERVICE_UNAVAILABLE,
-                f"Query embedding failed: {e}. Please use list_all_apis as fallback.",
-            ) from e
+        # 1. Step 0: Bilingual Query Enrichment (when enabled)
+        search_queries: list[str] = [clean_query]
+        enrichment_result: Optional[QueryEnrichmentResult] = None
 
-        # 2. Stage 1: Vector similarity retrieval
-        # Retrieves only eligible (approved, enabled, read_only, GET) candidates up to candidate_limit
-        stage1_candidates = self._vector_index.search(
-            query_vector=query_vector,
-            candidate_limit=self._candidate_limit,
-            domain_filter=domain,
-            filter_eligible=True,
-        )
+        if self._query_enrichment_service and self._query_enrichment_service.is_enabled:
+            enrichment_result = await self._query_enrichment_service.enrich_query(clean_query)
+            search_queries = enrichment_result.all_unique_queries
+
+        # 2. Stage 1: Vector Similarity Retrieval
+        # If single query: direct embedding and retrieval
+        if len(search_queries) == 1:
+            try:
+                query_vector = await self._embedding_provider.embed_query(search_queries[0])
+            except Exception as e:
+                _logger.error_event("Query embedding failed", details={"error": str(e)})
+                raise McpToolError.from_code(
+                    ErrorCode.EMBEDDING_SERVICE_UNAVAILABLE,
+                    f"Query embedding failed: {e}. Please use list_all_apis as fallback.",
+                ) from e
+
+            stage1_candidates = self._vector_index.search(
+                query_vector=query_vector,
+                candidate_limit=self._candidate_limit,
+                domain_filter=domain,
+                filter_eligible=True,
+            )
+        else:
+            # Multi-query variant retrieval with Reciprocal Rank Fusion (RRF) and Max-Similarity Preservation
+            # candidate_map: key -> (CatalogEntry, max_sim, rrf_score, count)
+            candidate_map: dict[tuple[str, str], tuple[CatalogEntry, float, float, int]] = {}
+            k_rrf = 60.0
+
+            for q_text in search_queries:
+                try:
+                    q_vec = await self._embedding_provider.embed_query(q_text)
+                except Exception as e:
+                    _logger.warning_event(
+                        "Variant query embedding failed; skipping variant",
+                        details={"query_variant": q_text, "error": str(e)},
+                    )
+                    continue
+
+                q_candidates = self._vector_index.search(
+                    query_vector=q_vec,
+                    candidate_limit=self._candidate_limit,
+                    domain_filter=domain,
+                    filter_eligible=True,
+                )
+
+                for rank_idx, (entry, sim) in enumerate(q_candidates):
+                    key = entry.composite_key
+                    rrf_contrib = 1.0 / (k_rrf + (rank_idx + 1))
+                    if key in candidate_map:
+                        prev_entry, prev_sim, prev_rrf, count = candidate_map[key]
+                        candidate_map[key] = (
+                            prev_entry,
+                            max(prev_sim, sim),
+                            prev_rrf + rrf_contrib,
+                            count + 1,
+                        )
+                    else:
+                        candidate_map[key] = (entry, sim, rrf_contrib, 1)
+
+            # Sort fused candidates by RRF score descending, breaking ties with peak cosine similarity
+            sorted_fused = sorted(
+                candidate_map.values(),
+                key=lambda item: (item[2], item[1]),
+                reverse=True,
+            )
+            stage1_candidates = [
+                (entry, max_sim) for entry, max_sim, _, _ in sorted_fused[: self._candidate_limit]
+            ]
 
         _logger.info_event(
             "Stage 1 semantic retrieval completed",
             candidate_count=len(stage1_candidates),
             search_mode=self.search_mode,
+            details={
+                "queries_evaluated": len(search_queries),
+                "enrichment_active": enrichment_result is not None,
+            },
         )
 
         if not stage1_candidates:
@@ -244,12 +313,13 @@ class SemanticSearchService:
                 ),
             )
 
-        # 3. Stage 2: Reranking (if enabled and provider present)
+        # 3. Stage 2: Reranking (evaluated against the original user query)
         ranked_candidates: list[tuple[CatalogEntry, float, Optional[float]]] = []
 
         if self._reranking_enabled and self._reranker_provider:
             try:
-                reranked = await self._reranker_provider.rerank(query, stage1_candidates)
+                # Pass original user query to evaluate true intent
+                reranked = await self._reranker_provider.rerank(clean_query, stage1_candidates)
                 # Map back to tuple (entry, rerank_score, semantic_score)
                 semantic_map = {entry.composite_key: sim for entry, sim in stage1_candidates}
                 for entry, r_score in reranked:
@@ -337,4 +407,3 @@ class SemanticSearchService:
             message=message,
             warning=warning,
         )
-
