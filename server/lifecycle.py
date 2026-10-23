@@ -52,7 +52,7 @@ class ApplicationLifecycle:
         self.config: Optional[AppConfig] = None
         self.openapi_loader: Optional[OpenApiLoader] = None
         self.registry: Optional[ApiRegistry] = None
-        self.api_client: Optional[DotNetApiClient] = None
+        self.api_client: Optional[ApiClient] = None
         self.mcp: Optional[FastMCP] = None
 
         # Search components

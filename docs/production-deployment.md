@@ -17,10 +17,10 @@ This document outlines configuration requirements, networking architecture, secr
 |---|---|---|---|
 | `application.name` | `"mcp_server"` | `"pm-mcp-server"` | Production service/display identifier |
 | `application.environment` | `"development"` | `"production"` | Enables production-grade policies and logs |
-| `dotnet_api.base_url` | `http://localhost:5273` | `https://api.internal.domain` | Internal base URL of the deployed ASP.NET Core API |
-| `dotnet_api.swagger_ui_url` | `http://localhost:5273/swagger/index.html` | `https://api.internal.domain/swagger/index.html` | Swagger UI location for contract verification |
-| `dotnet_api.openapi_spec_url` | `null` | `https://api.internal.domain/swagger/v1/swagger.json` | Explicit verified OpenAPI specification URL |
-| `dotnet_api.timeout_seconds` | `30` | `30` - `60` | Tuned to production network SLAs |
+| `api_client.base_url` | `http://localhost:5273` | `https://api.internal.domain` | Internal base URL of the deployed target API |
+| `api_client.swagger_ui_url` | `http://localhost:5273/swagger/index.html` | `https://api.internal.domain/swagger/index.html` | Swagger UI location for contract verification |
+| `api_client.openapi_spec_url` | `null` | `https://api.internal.domain/swagger/v1/swagger.json` | Explicit verified OpenAPI specification URL |
+| `api_client.timeout_seconds` | `30` | `30` - `60` | Tuned to production network SLAs |
 | `ollama.base_url` | `http://localhost:11434` | `http://ollama-service.internal:11434` | Accessible internal Ollama service hostname |
 | `ollama.timeout_seconds` | `60` | `60` - `120` | Timeout accommodating model load and queue times |
 | `search.embedding.model` | `"bge-m3:latest"` | `"bge-m3:latest"` | Must be pre-pulled in production Ollama instance |
@@ -50,11 +50,13 @@ This document outlines configuration requirements, networking architecture, secr
 
 ## 4. Secret & Credential Management
 
-- **No Inbound Secret Storage in Repository**: `.env` and configuration files in source control must contain zero secrets.
-- **Environment Variable Ingestion**: Production secrets must be injected at runtime via environment variables or a secrets manager (e.g., Kubernetes Secrets, HashiCorp Vault, AWS Secrets Manager):
-  - `MCP_DOTNET_API_KEY`: S2S token for downstream .NET API calls (if required).
-  - `MCP_DOTNET_API_TOKEN`: Downstream authorization token (if required).
-- **Inbound JWT Handling**: The MCP server inspects the `exp` claim of inbound tokens for freshness; downstream credentials remain isolated and managed by the .NET API layer.
+- **No Secret Storage in Repository**: Source control repositories must contain zero credentials or tokens.
+- **Strict `.env` Separation**: Only authentication tokens, keys, and secrets are ingested from environment variables. All non-sensitive structural configuration resides in `config/config.yaml`.
+- **Production Secret Ingestion**: Production secrets must be injected at runtime via environment variables or a secrets manager (e.g., Kubernetes Secrets, HashiCorp Vault, AWS Secrets Manager):
+  - `API_BEARER_TOKEN`: Authorization bearer token for downstream API calls (if required).
+  - `EMBEDDING_API_KEY`: Token for remote embedding provider (if remote provider is configured).
+  - `RERANKER_API_KEY`: Token for remote reranking provider (if remote provider is configured).
+- **Inbound JWT Handling**: The MCP server inspects the `exp` claim of inbound tokens for freshness; downstream credentials remain isolated and managed by the target API layer.
 
 ---
 
@@ -63,4 +65,3 @@ This document outlines configuration requirements, networking architecture, secr
 - **Persistent Volume Requirement**: Mount a persistent volume at `cache.directory` (`/var/cache/mcp_server/embeddings`). This prevents cold startup delays and re-embedding the entire catalog every time a container restarts.
 - **Model Upgrades**: Updating `bge-m3:latest` to a different model or changing vector dimensions will automatically invalidate cached vectors and generate fresh embeddings using SHA-256 fingerprint verification.
 - **Zero-Downtime Cache Warmup**: When performing significant catalog changes, pre-warm the cache during CI/CD staging before promoting images to production.
-

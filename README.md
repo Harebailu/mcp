@@ -1,6 +1,6 @@
 # `mcp_server` — Generic Metadata-Driven Python MCP Server
 
-A generic, metadata-driven Model Context Protocol (MCP) server written in Python to integrate AI agents with an existing ASP.NET Core/.NET application.
+A generic, metadata-driven Model Context Protocol (MCP) server written in Python to integrate AI agents with downstream application APIs.
 
 `mcp_server` eliminates endpoint-specific tool sprawl by exposing four generic MCP tools operating against a dynamic runtime registry combining OpenAPI technical specifications with domain-partitioned YAML business metadata, local Ollama-powered multilingual semantic retrieval (`bge-m3:latest`), structured candidate reranking (`qwen:1.8b`), persistent vector caching, and structured JSON observability.
 
@@ -10,7 +10,7 @@ A generic, metadata-driven Model Context Protocol (MCP) server written in Python
 
 ## 1. Core Architecture and Responsibilities
 
-Instead of generating separate MCP tools for 70+ to 300+ APIs, `mcp_server` exposes four generic tools:
+Instead of generating separate MCP tools for dozens or hundreds of individual APIs, `mcp_server` exposes four generic tools:
 
 | MCP Tool | Primary Responsibility | Agent Usage Policy |
 |---|---|---|
@@ -20,7 +20,7 @@ Instead of generating separate MCP tools for 70+ to 300+ APIs, `mcp_server` expo
 | `list_all_apis` | Full-catalog paginated browser including unapproved and disabled endpoints. | **Fallback Only**: Used ONLY when search fails or is insufficient. |
 
 ```
-AI Agent -> [search_apis] -> [get_api_schema] -> [execute_api] -> .NET API
+AI Agent -> [search_apis] -> [get_api_schema] -> [execute_api] -> Downstream API
                  |
                  +-> (if search insufficient) -> [list_all_apis]
 ```
@@ -40,13 +40,32 @@ In accordance with strict system invariants:
 
 ---
 
-## 3. Local Ollama Integration (`bge-m3:latest` & `qwen:1.8b`)
+## 3. Configuration & Secret Separation
+
+`mcp_server` follows a strict separation of sensitive secrets and structural configuration:
+
+1. **Sensitive Credentials Only in `.env`**:
+   - Environment variables and `.env` files are strictly reserved for authentication tokens and API keys:
+     - `EMBEDDING_API_KEY`: Secret key for remote embedding provider (when configured).
+     - `RERANKER_API_KEY`: Secret key for remote reranker provider (when configured).
+     - `API_BEARER_TOKEN`: Authorization bearer token for downstream API calls.
+2. **All Non-Sensitive Settings in `config/config.yaml`**:
+   - Network bindings, base URLs (`api_client.base_url`, `ollama.base_url`), timeouts, ports, payload limits, model identifiers, cache directories, logging levels, and startup modes are declared exclusively in `config/config.yaml`.
+3. **No Backward Compatibility Logic**:
+   - All legacy environment prefixes (e.g. `PM_MCP_*`) and obsolete client classes (`DotNetApiClient`) have been completely removed in favor of clean `mcp_server` standards and generic `ApiClient`.
+4. **Dedicated System Instructions (`config/server_instructions.md`)**:
+   - Global server instructions, business domain descriptions, and agent guidelines are maintained in an external markdown file (`config/server_instructions.md`) and injected into the MCP server instance at startup.
+   - This keeps the catalog YAML templates clean, concise, and focused solely on API metadata.
+
+---
+
+## 4. Local Ollama Integration (`bge-m3:latest` & `qwen:1.8b`)
 
 API search uses a two-stage local retrieval and reranking pipeline with Ollama:
 
 1. **Stage 1 (Vector Similarity via `bge-m3:latest`)**:
    - Computes 1024-dimensional dense vectors for catalog entries and user queries.
-   - Enables cross-lingual matching (e.g., Korean user queries discovering English API business descriptions).
+   - Enables cross-lingual matching (e.g., multilingual user queries discovering English API business descriptions).
    - In-memory vector store performs unit-normalized cosine similarity ranking.
 2. **Stage 2 (Candidate Reranking via `qwen:1.8b`)**:
    - Passes user queries and retrieved candidates to local `qwen:1.8b` using a structured reranking prompt template (`search/prompts/rerank_template.txt`).
@@ -55,13 +74,13 @@ API search uses a two-stage local retrieval and reranking pipeline with Ollama:
 3. **Operational Eligibility Boundary**:
    - Embeddings are computed strictly over business metadata (`endpoint_name`, `display_name`, `description`, `use_when`, `avoid_when`, `input_descriptions`, `output_description`, `abbreviations`, `dependent_apis`).
    - Operational status flags (`enabled`, `approval_status`, `access_mode`) are excluded from document text and fingerprints. Toggling status takes effect immediately at runtime without invalidating vector caches.
-4. **No Mock Providers & No Keyword Search**:
-   - All mock providers have been removed; retrieval connects to actual local Ollama models.
-   - Keyword search and fields (`keywords`, `synonyms`) have been completely purged.
+4. **Clean Semantic Architecture**:
+   - Operates against real local Ollama models (with support for remote providers via standard credentials).
+   - Keyword search and deprecated fields (`keywords`, `synonyms`) have been completely purged.
 
 ---
 
-## 4. Persistent Embedding Cache
+## 5. Persistent Embedding Cache
 
 Embeddings are saved to disk under `cache/api_embeddings/` using safe atomic JSON serialization:
 - Each catalog entry is fingerprinted via SHA-256 of its normalized searchable text.
@@ -70,18 +89,18 @@ Embeddings are saved to disk under `cache/api_embeddings/` using safe atomic JSO
 
 ---
 
-## 5. Domain-Based Catalog Organization
+## 6. Domain-Based Catalog Organization
 
 The catalog is split into modular domain files with a root manifest:
 ```
 catalog/
-├── api_catalog.yaml         # Manifest referencing domain files
+├── api_catalog.yaml                 # Manifest referencing domain files
 ├── domains/
-│   ├── superuser.yaml       # Superuser management operations
-│   └── auth.yaml            # Authentication endpoints
-├── catalog_validator.py     # Integrity validation engine
+│   ├── superuser.yaml               # Superuser management operations
+│   └── auth.yaml                    # Authentication endpoints
+├── catalog_validator.py             # Integrity validation engine
 ├── compare_catalog_with_openapi.py  # Read-only contract comparison tool
-└── sync_from_openapi.py     # Bootstrap / sync utility
+└── sync_from_openapi.py             # Bootstrap / sync utility
 ```
 
 - **Domain Inheritance**: Entries inherit the containing file's `domain` unless explicitly matching.
@@ -90,7 +109,7 @@ catalog/
 
 ---
 
-## 6. Startup Modes and Resilience
+## 7. Startup Modes and Resilience
 
 Configured in `config/config.yaml`:
 
@@ -99,7 +118,7 @@ Configured in `config/config.yaml`:
 
 ---
 
-## 7. Structured JSON Observability
+## 8. Structured JSON Observability
 
 All operational logs are emitted to `stdout` as standardized, single-line JSON objects:
 - Fields include `timestamp`, `level`, `component`, `event`, `tool_name`, `duration_ms`, `outcome`, `candidate_count`, and `details`.
@@ -107,7 +126,7 @@ All operational logs are emitted to `stdout` as standardized, single-line JSON o
 
 ---
 
-## 8. Quick Start
+## 9. Quick Start
 
 ### Installation
 ```bash
@@ -134,5 +153,10 @@ mcp-server
 python catalog/compare_catalog_with_openapi.py
 ```
 
-### Production Deployment
-Refer to [`docs/production-deployment.md`](docs/production-deployment.md) for full production deployment instructions.
+### Documentation & Reference
+- Architecture Guide: [`docs/architecture.md`](docs/architecture.md)
+- Configuration Reference: [`docs/configuration.md`](docs/configuration.md)
+- Catalog Maintenance: [`docs/catalog-maintenance.md`](docs/catalog-maintenance.md)
+- Security Architecture: [`docs/security.md`](docs/security.md)
+- Operational Runbook: [`docs/operations.md`](docs/operations.md)
+- Production Deployment: [`docs/production-deployment.md`](docs/production-deployment.md)

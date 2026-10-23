@@ -1,17 +1,19 @@
 # Configuration Reference: `mcp_server`
 
-`mcp_server` uses strongly typed configuration via Pydantic v2. Settings are loaded from `config/config.yaml` and can be overridden by environment variables.
+`mcp_server` uses strongly typed configuration via Pydantic v2. Non-sensitive settings are loaded from `config/config.yaml`. Environment variables are strictly reserved for sensitive tokens and credentials.
 
 ---
 
-## 1. Configuration Structure
+## 1. Configuration Structure (`config/config.yaml`)
 
 ```yaml
 application:
   name: "mcp_server"              # Production service name: "pm-mcp-server"
   environment: "development"      # "development" or "production"
 
-dotnet_api:
+instructions_file: "config/server_instructions.md"  # Path to external markdown instructions
+
+api_client:
   base_url: "http://localhost:5273"
   swagger_ui_url: "http://localhost:5273/swagger/index.html"
   openapi_spec_url: null
@@ -40,6 +42,8 @@ search:
     dimensions: 1024
     batch_size: 32
     timeout_seconds: 60
+    base_url: null
+    endpoint_path: null
 
   reranking:
     enabled: true
@@ -48,6 +52,8 @@ search:
     required: true
     candidate_limit: 20
     timeout_seconds: 60
+    base_url: null
+    endpoint_path: null
 
   llm:
     enabled: false
@@ -55,7 +61,6 @@ search:
     base_url: null
     endpoint_path: null
     model: null
-    api_key_env_var: "LLM_API_KEY"
     timeout_seconds: 20
 
   query_enrichment:
@@ -86,35 +91,35 @@ authentication:
 
 ---
 
-## 2. Environment Variable Overrides
+## 2. Environment Variables & Secret Isolation Policy
 
-| Environment Variable | Target Configuration Key | Description |
+In accordance with strict security architecture, **environment variables (`.env`) are reserved exclusively for sensitive tokens and credentials**. All non-sensitive configuration values (such as URLs, timeouts, transport types, model names, and ports) reside directly in `config/config.yaml`.
+
+### Permitted Sensitive Environment Variables
+
+| Environment Variable | Target Configuration Key | Purpose |
 |---|---|---|
-| `MCP_OLLAMA_BASE_URL` | `ollama.base_url` | Host/service URL of the local or containerized Ollama instance |
-| `MCP_OLLAMA_TIMEOUT` | `ollama.timeout_seconds` | Request timeout in seconds for Ollama calls |
-| `MCP_DOTNET_BASE_URL` | `dotnet_api.base_url` | Base URL of the downstream .NET API |
-| `MCP_DOTNET_SWAGGER_URL` | `dotnet_api.swagger_ui_url` | Swagger UI page URL |
-| `MCP_DOTNET_OPENAPI_URL` | `dotnet_api.openapi_spec_url` | Explicit OpenAPI JSON specification URL |
-| `MCP_DOTNET_TIMEOUT` | `dotnet_api.timeout_seconds` | Request timeout in seconds |
-| `MCP_HOST` | `mcp.host` | Host address to bind |
-| `MCP_PORT` | `mcp.port` | Port number to bind |
-| `MCP_TRANSPORT` | `mcp.transport` | `streamable_http`, `sse`, or `stdio` |
-| `MCP_SEARCH_BACKEND` | `search.backend` | Must be `semantic` |
-| `MCP_EMBEDDING_PROVIDER` | `search.embedding.provider` | `ollama` or `remote` |
-| `MCP_EMBEDDING_MODEL` | `search.embedding.model` | Embedding model identifier (`bge-m3:latest`) |
-| `MCP_RERANKER_PROVIDER` | `search.reranking.provider` | `ollama` or `remote` |
-| `MCP_RERANKER_MODEL` | `search.reranking.model` | Reranker model identifier (`qwen:1.8b`) |
-| `MCP_ALLOW_CATALOG_ONLY` | `startup_checks.allow_catalog_only_startup` | Enable catalog-only degraded startup |
-| `MCP_FAIL_ON_UNAVAILABLE` | `startup_checks.fail_on_service_unavailable` | Fail fast if model services are down |
-| `MCP_LOG_LEVEL` | `logging.level` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `MCP_AUTH_ENABLED` | `authentication.enabled` | Inbound JWT expiration check |
-| `MCP_CLOCK_SKEW` | `authentication.clock_skew_seconds` | Allowed JWT clock skew in seconds |
+| `EMBEDDING_API_KEY` (or `MCP_EMBEDDING_API_KEY`) | `search.embedding.api_key` | Secret API key for remote embedding provider (production) |
+| `RERANKER_API_KEY` (or `MCP_RERANKER_API_KEY`) | `search.reranking.api_key` | Secret API key for remote reranker provider (production) |
+| `API_BEARER_TOKEN` (or `MCP_API_KEY`) | `api_client.api_key` | Authorization token for downstream API communication |
 
-*(Legacy `PM_` environment variables are also supported for backward compatibility).*
+> **No Backward Compatibility Layer**:
+> All legacy prefixes (`PM_MCP_*`, `MCP_DOTNET_*`, `DotNetApiClient`) and backward compatibility translation layers have been removed. Configuration follows the clean, unified `mcp_server` structure.
 
 ---
 
-## 3. Operational Modes & Startup Invariants
+## 3. Server Instructions (`instructions_file`)
+
+The `instructions_file` setting specifies a markdown document (default: `config/server_instructions.md`) containing:
+- High-level business module capabilities (e.g. Project Management, Administration, Authentication).
+- Clear rules on when to search vs. list APIs.
+- The four-step execution workflow (`search_apis` -> `get_api_schema` -> upstream dependency resolution -> `execute_api`).
+
+At application startup, `mcp_server` reads this file and passes its contents directly to the `FastMCP` constructor. This cleanly decouples global agent instructions from individual catalog YAML files.
+
+---
+
+## 4. Operational Modes & Startup Invariants
 
 1. **Standard Ollama Mode**:
    - `search.embedding.provider: "ollama"` (`bge-m3:latest`)

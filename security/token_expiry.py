@@ -14,7 +14,7 @@ Checking an 'exp' claim without signature verification is only an
 expiration-claim check. It does not authenticate the token's issuer
 or prove the token is genuine.
 
-The .NET API layer remains responsible for enforcing its own
+The downstream API layer remains responsible for enforcing its own
 authentication and authorization requirements downstream.
 """
 

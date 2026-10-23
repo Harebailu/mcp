@@ -2,10 +2,10 @@
 
 ## 1. Security Overview
 
-`mcp_server` (production service: `pm-mcp-server`) sits between an AI Agent and an existing ASP.NET Core/.NET backend. Its primary security responsibilities are:
+`mcp_server` (production service: `pm-mcp-server`) sits between an AI Agent and a downstream application backend. Its primary security responsibilities are:
 - Server-side read-only policy enforcement.
 - Inbound MCP JWT expiration-claim verification.
-- Sensitive credential isolation.
+- Sensitive credential isolation (`.env` strictly reserved for sensitive tokens).
 - Structured JSON logging with strict secret and token masking.
 - Prevention of arbitrary path traversal and injection.
 
@@ -17,7 +17,7 @@
 The inbound MCP JWT validation checks **only the `exp` claim** to verify that the token has not expired.
 - **Critical Limitation**: It does **not** verify the cryptographic signature, issuer (`iss`), audience (`aud`), or subject roles.
 - Checking `exp` without cryptographic signature verification does not prove authenticity or authenticity of the issuer. It is solely a freshness sanity check.
-- The downstream ASP.NET Core API layer remains the sole and final authority for downstream authentication, authorization, and permission enforcement.
+- The downstream API service layer remains the sole and final authority for downstream authentication, authorization, and permission enforcement.
 
 ### 2.2 Token Handling
 - Inbound MCP bearer tokens are parsed to extract claims for the request context.
@@ -26,7 +26,16 @@ The inbound MCP JWT validation checks **only the `exp` claim** to verify that th
 
 ---
 
-## 3. Server-Side Read-Only Policy
+## 3. Credential Isolation & Environment Variable Security
+
+To safeguard secrets and eliminate credential leakage:
+- **Strict `.env` Boundary**: Only sensitive authentication tokens and API keys are permitted in `.env` (`API_BEARER_TOKEN`, `EMBEDDING_API_KEY`, `RERANKER_API_KEY`). All non-sensitive structural configuration resides directly in `config/config.yaml`.
+- **Zero Secrets in Repository**: `.env` is included in `.gitignore` and must never be committed to source control.
+- **Runtime S2S Authentication**: When communicating with the downstream API, `ApiClient` injects the server-configured bearer token from the environment, completely decoupling the agent's inbound token from the downstream service's authentication.
+
+---
+
+## 4. Server-Side Read-Only Policy
 
 To prevent unauthorized mutating operations from executing:
 1. **Allowed Methods**: Only `GET`, `HEAD`, and `OPTIONS` are allowed. Mutating methods (`POST`, `PUT`, `DELETE`, `PATCH`) are rejected before execution.
@@ -37,7 +46,7 @@ To prevent unauthorized mutating operations from executing:
 
 ---
 
-## 4. Observability & Redaction Standards
+## 5. Observability & Redaction Standards
 
 All logs are emitted as single-line JSON to `stdout`. The logging subsystem automatically filters and redacts:
 - Authorization headers (`Bearer [REDACTED]`).

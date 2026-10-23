@@ -6,13 +6,13 @@ The API catalog is organized into domain-specific files referenced by a root man
 
 ```
 catalog/
-├── api_catalog.yaml         # Root manifest
+├── api_catalog.yaml                 # Root manifest referencing domain files
 ├── domains/
-│   ├── superuser.yaml       # Superuser management operations
-│   └── auth.yaml            # Authentication endpoints
-├── catalog_validator.py     # Integrity validation engine
+│   ├── superuser.yaml               # Superuser management operations
+│   └── auth.yaml                    # Authentication endpoints
+├── catalog_validator.py             # Integrity validation engine
 ├── compare_catalog_with_openapi.py  # Read-only drift report tool
-└── sync_from_openapi.py     # Bootstrap / sync utility
+└── sync_from_openapi.py             # Bootstrap / sync utility
 ```
 
 ### Manifest Format (`catalog/api_catalog.yaml`)
@@ -57,6 +57,10 @@ apis:
 4. **Allowed Methods**: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`.
 5. **Allowed Access Modes**: `read_only`, `read_write`.
 6. **No Keywords/Synonyms**: Legacy `keywords` and `synonyms` fields are forbidden and rejected by the loader. Search is strictly multilingual semantic retrieval.
+7. **Clean Catalog Schema**:
+   - Catalog entries focus strictly on API endpoint metadata (`endpoint_name`, `method`, `path`, `display_name`, `description`, `use_when`, `avoid_when`, `input_descriptions`, `output_description`, `abbreviations`, `dependent_apis`).
+   - Detailed field-level parameter schemas and response formats are retrieved dynamically via `get_api_schema` from the live OpenAPI contract.
+   - Global agent system instructions and domain overviews are maintained separately in `config/server_instructions.md` and injected into the MCP instance at startup.
 
 ---
 

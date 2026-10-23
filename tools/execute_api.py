@@ -1,6 +1,6 @@
 """MCP tool: execute_api — Execute one approved API operation.
 
-Executes a single .NET API operation after server-side validation.
+Executes a single downstream API operation after server-side validation.
 Uses the generic input schema (endpoint_name, method, path_params,
 query_params, body) rather than a unique schema per endpoint.
 

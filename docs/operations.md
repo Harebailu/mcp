@@ -32,7 +32,7 @@ Default HTTP endpoints:
 - Connects to local Ollama instance at `http://localhost:11434`.
 - Uses `bge-m3:latest` for 1024-dimensional dense semantic retrieval.
 - Uses `qwen:1.8b` for structured candidate reranking.
-- Configuration:
+- Configuration in `config/config.yaml`:
   ```yaml
   ollama:
     base_url: "http://localhost:11434"
@@ -54,7 +54,7 @@ Default HTTP endpoints:
 ### Mode 2: Strict Mode (Fail-Fast)
 - Required when search and reranking are mandatory for serving agent queries.
 - If Ollama is unreachable or either model is missing, the server aborts startup immediately with a structured error log.
-- Configuration:
+- Configuration in `config/config.yaml`:
   ```yaml
   startup_checks:
     fail_on_service_unavailable: true
@@ -62,8 +62,8 @@ Default HTTP endpoints:
   ```
 
 ### Mode 3: Catalog-Only Resilience
-- Intended for degraded scenarios where the downstream .NET API should remain accessible through `list_all_apis`, `get_api_schema`, and `execute_api` even if Ollama is temporarily offline.
-- Configuration:
+- Intended for degraded scenarios where the downstream target API should remain accessible through `list_all_apis`, `get_api_schema`, and `execute_api` even if Ollama is temporarily offline.
+- Configuration in `config/config.yaml`:
   ```yaml
   startup_checks:
     fail_on_service_unavailable: false
@@ -98,8 +98,3 @@ Logs are written to `stdout` in single-line JSON format. Example line:
 ```json
 {"timestamp": "2026-10-20T17:12:56.644876+00:00", "level": "INFO", "component": "SemanticSearchService", "event": "Vector index successfully built and ready", "duration_ms": 12395.96, "search_mode": "ollama", "candidate_count": 4}
 ```
-
-Key fields to monitor:
-- `outcome`: `"ready"`, `"success"`, `"tool_error"`, `"internal_error"`, `"cache_hit"`, `"cache_miss"`.
-- `error_code`: Machine-readable error code if a failure occurred.
-- `duration_ms`: Execution latency for tool operations and startup steps.
